@@ -4,9 +4,9 @@ This guide will help you install and configure the Simple PhotoBooth application
 
 ## System Requirements
 
-- Raspberry Pi 5 (8GB recommended) or compatible system
-- Raspberry Pi OS (Debian-based)
-- Python 3.x
+- Raspberry Pi 5 (8GB recommended) or compatible PC/laptop
+- Raspberry Pi OS, Debian, Ubuntu, Fedora, or Arch Linux / CachyOS
+- Python 3.9+
 - Internet connection for initial setup
 
 ## Quick Installation
@@ -24,24 +24,33 @@ The script will guide you through the installation process and ask which compone
 
 ### 1. Global Packages
 
-Install system dependencies and Python packages:
+Install system dependencies and development libraries for your distribution:
+
+**Debian / Ubuntu / Raspberry Pi OS:**
+```bash
+sudo apt update
+sudo apt install -y build-essential git python3-pip python3-venv python3-dev libgl1 libcups2-dev
+```
+
+**Fedora:**
+```bash
+sudo dnf install -y gcc make git python3-pip python3-devel mesa-libGL cups-devel
+```
+
+**Arch Linux / CachyOS:**
+```bash
+sudo pacman -S --needed base-devel git python-pip libglvnd libcups
+```
+
+Then create and activate the Python virtual environment:
 
 ```bash
-# Update system
-sudo apt update
-
-# Install build dependencies
-sudo apt-get install -y gcc make build-essential git scons swig
-sudo apt install -y ffmpeg libturbojpeg0 python3-pip libgl1 libgphoto2-dev
-
 # Create and activate a Python virtual environment
 python3 -m venv .venv
 source .venv/bin/activate
 
 # Install Python dependencies
 pip install -r requirements.txt
-
-> **Note:** Installing `pycups` requires CUPS development headers on your system (e.g. `libcups2-dev` on Debian/Ubuntu, `cups` on Arch Linux, `cups-devel` on Fedora).
 ```
 
 ### 2. Kiosk Mode Configuration (Optional)
@@ -108,11 +117,23 @@ libcamera-still --autofocus-mode=auto -f -o test.jpg
 
 If you plan to use a DSLR camera:
 
+**Debian / Ubuntu / Raspberry Pi OS:**
 ```bash
-# Install gPhoto2 and development libraries (Debian/Ubuntu)
 sudo apt install -y gphoto2 libgphoto2-dev
+```
 
-# Test camera connection
+**Fedora:**
+```bash
+sudo dnf install -y gphoto2 libgphoto2-devel
+```
+
+**Arch Linux / CachyOS:**
+```bash
+sudo pacman -S --needed gphoto2 libgphoto2
+```
+
+Test camera connection:
+```bash
 gphoto2 --capture-image
 ```
 
@@ -120,17 +141,26 @@ gphoto2 --capture-image
 
 If you want to print photos directly from the photobooth:
 
+**Debian / Ubuntu / Raspberry Pi OS:**
 ```bash
-# Install CUPS and drivers
-sudo apt-get install -y cups libcups2-dev
+sudo apt install -y cups printer-driver-gutenprint
 sudo usermod -a -G lpadmin $USER
+```
+
+**Fedora:**
+```bash
+sudo dnf install -y cups gutenprint-cups
+```
+
+**Arch Linux / CachyOS:**
+```bash
+sudo pacman -S --needed cups gutenprint
+```
+
+**Enable and start CUPS service:**
+```bash
+sudo systemctl enable --now cups
 sudo cupsctl --remote-admin --remote-any
-
-# Install driverless printer support
-sudo apt install -y printer-driver-gutenprint
-
-# Restart CUPS service
-sudo systemctl restart cups
 ```
 
 **Printer Configuration:**

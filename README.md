@@ -112,10 +112,15 @@ The application automatically selects the best available camera configuration:
 
 ## Compatibility
 
-Tested on:
-- macOS Sonoma/Sequoia
-- Raspberry Pi 5 (8GB) with Raspberry Pi Camera Module 3
+### Target Platforms
 - Raspberry Pi OS (Debian-based)
+- Debian / Ubuntu
+- Fedora
+- Arch Linux / CachyOS
+
+### Tested Platforms
+- Raspberry Pi 5 (8GB) with Raspberry Pi Camera Module 3 (Raspberry Pi OS)
+- macOS Sonoma/Sequoia (development and preview mode)
 
 ## Recommended Hardware Components
 | Product                              | Links                                                                                                             |

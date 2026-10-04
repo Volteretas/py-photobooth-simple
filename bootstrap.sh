@@ -6,7 +6,7 @@ REPO_URL="${PHOTOBOOTH_REPO_URL:-https://github.com/IArchi/py-photobooth-simple.
 INSTALL_DIR="${PHOTOBOOTH_INSTALL_DIR:-$HOME/py-photobooth-simple}"
 
 if ! command -v git >/dev/null 2>&1; then
-    printf 'Git is required. Install it with: sudo apt-get install -y git\n' >&2
+    printf 'Git is required. Please install it with your package manager (e.g., sudo apt install git, sudo dnf install git, or sudo pacman -S git).\n' >&2
     exit 1
 fi
 

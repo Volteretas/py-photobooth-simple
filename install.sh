@@ -160,6 +160,79 @@ is_raspberry_pi() {
     return 1
 }
 
+detect_distro() {
+    if [ -f /etc/os-release ]; then
+        local id="" id_like=""
+        id=$(grep -E '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"'\''')
+        id_like=$(grep -E '^ID_LIKE=' /etc/os-release | cut -d= -f2 | tr -d '"'\''')
+
+        case "$id:$id_like" in
+            *debian*|*ubuntu*|*raspbian*)
+                echo "debian"
+                return 0
+                ;;
+            *fedora*)
+                echo "fedora"
+                return 0
+                ;;
+            *arch*|*cachyos*)
+                echo "arch"
+                return 0
+                ;;
+        esac
+    fi
+
+    if command_exists apt-get; then
+        echo "debian"
+    elif command_exists dnf; then
+        echo "fedora"
+    elif command_exists pacman; then
+        echo "arch"
+    else
+        echo "unknown"
+    fi
+}
+
+pkg_update() {
+    case "$DISTRO_FAMILY" in
+        debian)
+            sudo apt-get update
+            ;;
+        fedora)
+            :
+            ;;
+        arch)
+            # Avoid running isolated pacman -Sy to prevent partial upgrade risks
+            :
+            ;;
+    esac
+}
+
+pkg_install() {
+    local deb_pkgs="$1"
+    local fed_pkgs="$2"
+    local arch_pkgs="$3"
+
+    case "$DISTRO_FAMILY" in
+        debian)
+            # shellcheck disable=SC2086
+            sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y $deb_pkgs
+            ;;
+        fedora)
+            # shellcheck disable=SC2086
+            sudo dnf install -y $fed_pkgs
+            ;;
+        arch)
+            # shellcheck disable=SC2086
+            sudo pacman -S --needed --noconfirm $arch_pkgs
+            ;;
+        *)
+            print_error "Unsupported distribution family: $DISTRO_FAMILY"
+            return 1
+            ;;
+    esac
+}
+
 escape_systemd_value() {
     printf '%s' "$1" | sed 's/[[:space:]]/\\x20/g'
 }
@@ -188,11 +261,11 @@ get_wifi_country() {
 
 has_internet_connection() {
     if command_exists curl; then
-        curl -fsI --connect-timeout 5 --max-time 10 https://deb.debian.org >/dev/null 2>&1 && return 0
+        curl -fsI --connect-timeout 5 --max-time 10 https://pypi.org >/dev/null 2>&1 && return 0
     fi
 
     if command_exists wget; then
-        wget -q --spider --timeout=10 https://deb.debian.org >/dev/null 2>&1 && return 0
+        wget -q --spider --timeout=10 https://pypi.org >/dev/null 2>&1 && return 0
     fi
 
     ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1
@@ -230,6 +303,14 @@ echo ""
 print_info "Starting installation..."
 echo ""
 
+DISTRO_FAMILY=$(detect_distro)
+if [ "$DISTRO_FAMILY" = "unknown" ]; then
+    print_error "Unsupported Linux distribution."
+    print_error "Supported distributions: Debian, Ubuntu, Raspberry Pi OS, Fedora, Arch Linux, and CachyOS."
+    exit 1
+fi
+print_info "Detected Linux distribution family: $DISTRO_FAMILY"
+
 if ! has_internet_connection; then
     print_warning "No Internet connection detected. Network downloads and package installations will be skipped."
     if ask_yes_no "Do you want to continue anyway?"; then
@@ -249,8 +330,16 @@ print_info "Step 1/9: Installing base system dependencies..."
 if [ "$SKIP_ONLINE_STEPS" = true ]; then
     print_warning "Skipping base dependencies installation because Internet is unavailable"
 else
-    sudo apt-get update
-    sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y gcc make build-essential git scons swig ffmpeg libturbojpeg0 python3-pip libgl1 libgphoto2-dev
+    pkg_update
+
+    # Base dependencies per distribution family:
+    # Note: CUPS development headers (libcups2-dev, cups-devel, libcups) and Python development
+    # headers are included here so that pycups builds reliably in Step 2.
+    DEB_BASE="build-essential git python3-pip python3-venv python3-dev libgl1 libcups2-dev"
+    FED_BASE="gcc make git python3-pip python3-devel mesa-libGL cups-devel"
+    ARCH_BASE="base-devel git python-pip libglvnd libcups"
+
+    pkg_install "$DEB_BASE" "$FED_BASE" "$ARCH_BASE"
 
     print_success "Base dependencies installed"
 fi
@@ -302,7 +391,9 @@ if is_raspberry_pi; then
         
         # Disable power warning
         append_root_line_if_missing /boot/firmware/config.txt "avoid_warnings=1"
-        sudo apt remove lxplug-ptbatt -y || true
+        if command_exists apt-get; then
+            sudo env DEBIAN_FRONTEND=noninteractive apt-get remove -y lxplug-ptbatt 2>/dev/null || true
+        fi
         
         # Disable media mount dialog
         sudo sed -i -e 's/autorun=1/autorun=0/g' /etc/xdg/pcmanfm/LXDE-pi/pcmanfm.conf || true
@@ -376,9 +467,12 @@ if ask_yes_no "Step 6/9: Do you want to install DSLR support (gPhoto2)?"; then
         print_warning "Skipping gPhoto2 installation because Internet is unavailable"
     else
         print_info "Configuring gPhoto2..."
-        if command_exists apt-get; then
-            sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y gphoto2 libgphoto2-dev || true
-        fi
+        DEB_GP="gphoto2 libgphoto2-dev"
+        FED_GP="gphoto2 libgphoto2-devel"
+        ARCH_GP="gphoto2 libgphoto2"
+
+        pkg_install "$DEB_GP" "$FED_GP" "$ARCH_GP"
+
         print_success "gPhoto2 support configured"
         print_warning "After installation, test with: gphoto2 --capture-image"
     fi
@@ -397,22 +491,43 @@ if ask_yes_no "Step 7/9: Do you want to install printer support (CUPS)?"; then
     else
         print_info "Installing CUPS..."
         
-        if command_exists apt-get; then
-            sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y cups libcups2-dev printer-driver-gutenprint || true
+        DEB_CUPS="cups printer-driver-gutenprint"
+        FED_CUPS="cups gutenprint-cups"
+        ARCH_CUPS="cups gutenprint"
+
+        pkg_install "$DEB_CUPS" "$FED_CUPS" "$ARCH_CUPS"
+
+        # On Debian/Ubuntu/Raspberry Pi OS, add user to lpadmin for web administration
+        # Note: Fedora and Arch do not use lpadmin; we do not modify system groups (wheel/sys).
+        if [ "$DISTRO_FAMILY" = "debian" ] && getent group lpadmin >/dev/null 2>&1; then
+            sudo usermod -a -G lpadmin "$USER" 2>/dev/null || true
         fi
-        sudo usermod -a -G lpadmin "$USER" 2>/dev/null || true
-        sudo cupsctl --remote-admin --remote-any 2>/dev/null || true
-        
-        # Restart CUPS
+
+        # Start and enable CUPS service
+        local cups_started=false
         if command_exists systemctl; then
-            sudo systemctl restart cups 2>/dev/null || true
+            if sudo systemctl enable --now cups; then
+                cups_started=true
+            fi
         elif [ -x /etc/init.d/cups ]; then
-            sudo /etc/init.d/cups restart 2>/dev/null || true
+            if sudo /etc/init.d/cups restart; then
+                cups_started=true
+            fi
         fi
-        
-        print_success "CUPS printer service configured"
-        print_info "Configure your printer in CUPS at: http://localhost:631/admin/ (or https://$(hostname -I 2>/dev/null | awk '{print $1}'):631/admin/)"
-        print_info "Then set PRINTER in config.ini to your printer name"
+
+        if [ "$cups_started" = true ]; then
+            if command_exists cupsctl; then
+                if ! sudo cupsctl --remote-admin --remote-any; then
+                    print_warning "Failed to enable remote CUPS administration with cupsctl"
+                fi
+            fi
+
+            print_success "CUPS printer service configured"
+            print_info "Configure your printer in CUPS at: http://localhost:631/admin/ (or https://$(hostname -I 2>/dev/null | awk '{print $1}'):631/admin/)"
+            print_info "Then set PRINTER in config.ini to your printer name"
+        else
+            print_warning "CUPS service could not be started automatically. You can start it manually with: sudo systemctl enable --now cups"
+        fi
     fi
 else
     print_info "Skipping CUPS installation"
