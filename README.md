@@ -160,10 +160,12 @@ chmod +x install.sh
 ./install.sh
 
 # Or install manually
-pip3 install -r requirements.txt --break-system-packages
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 
 # Run the application
-python3 photoboothapp.py
+python photoboothapp.py
 ```
 
 ## Customization

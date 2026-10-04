@@ -1,7 +1,7 @@
 numpy
 kivy
-lxml
 opencv-contrib-python
 psutil>=5.9.8,<6.0.0
 flask
 qrcode[pil]
+pycups

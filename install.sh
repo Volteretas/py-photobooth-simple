@@ -259,14 +259,26 @@ echo ""
 # ============================================================================
 # STEP 2: Python Dependencies
 # ============================================================================
-print_info "Step 2/9: Installing Python dependencies for the current user..."
+print_info "Step 2/9: Setting up Python virtual environment and dependencies..."
+
+VENV_DIR="$SCRIPT_DIR/.venv"
+
+if [ ! -d "$VENV_DIR" ]; then
+    print_info "Creating Python virtual environment in $VENV_DIR..."
+    if ! python3 -m venv "$VENV_DIR"; then
+        print_error "Failed to create Python virtual environment."
+        print_error "Please install the Python venv package for your distribution (e.g., sudo apt install python3-venv, sudo dnf install python3-virtualenv, or sudo pacman -S python)."
+        exit 1
+    fi
+    print_success "Python virtual environment created"
+fi
 
 if [ "$SKIP_ONLINE_STEPS" = true ]; then
     print_warning "Skipping Python dependencies installation because Internet is unavailable"
 else
-    python3 -m pip install --user -r "$SCRIPT_DIR/requirements.txt"
+    "$VENV_DIR/bin/python" -m pip install -r "$SCRIPT_DIR/requirements.txt"
 
-    print_success "Python dependencies installed for user $(id -un)"
+    print_success "Python dependencies installed in virtual environment (.venv)"
 fi
 echo ""
 
@@ -363,24 +375,11 @@ if ask_yes_no "Step 6/9: Do you want to install DSLR support (gPhoto2)?"; then
     if [ "$SKIP_ONLINE_STEPS" = true ]; then
         print_warning "Skipping gPhoto2 installation because Internet is unavailable"
     else
-        print_info "Installing gPhoto2..."
-        
-        # Download and run gPhoto2 updater
-        GPHOTO_TMP_DIR=$(mktemp -d)
-        download_file https://raw.githubusercontent.com/gonzalo/gphoto2-updater/master/gphoto2-updater.sh "$GPHOTO_TMP_DIR/gphoto2-updater.sh"
-        download_file https://raw.githubusercontent.com/gonzalo/gphoto2-updater/master/.env "$GPHOTO_TMP_DIR/.env"
-        chmod +x "$GPHOTO_TMP_DIR/gphoto2-updater.sh"
-        
-        print_info "Running gPhoto2 updater (this may take several minutes)..."
-        sudo "$GPHOTO_TMP_DIR/gphoto2-updater.sh" -s
-        
-        rm -rf "$GPHOTO_TMP_DIR"
-        
-        # Fix USB access issues
-        sudo chmod -x /usr/lib/gvfs/gvfs-gphoto2-volume-monitor || true
-        sudo chmod -x /usr/lib/gvfs/gvfsd-gphoto2 || true
-        
-        print_success "gPhoto2 installed"
+        print_info "Configuring gPhoto2..."
+        if command_exists apt-get; then
+            sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y gphoto2 libgphoto2-dev || true
+        fi
+        print_success "gPhoto2 support configured"
         print_warning "After installation, test with: gphoto2 --capture-image"
     fi
 else
@@ -398,19 +397,22 @@ if ask_yes_no "Step 7/9: Do you want to install printer support (CUPS)?"; then
     else
         print_info "Installing CUPS..."
         
-        sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y cups libcups2-dev python3-cups printer-driver-gutenprint
-        sudo usermod -a -G lpadmin $USER
-        sudo cupsctl --remote-admin --remote-any
-        
-        # Install printer drivers
-        sudo install -m 644 "$SCRIPT_DIR/docs/DS620.ppd" /usr/share/cups/model/DS620.ppd
+        if command_exists apt-get; then
+            sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y cups libcups2-dev printer-driver-gutenprint || true
+        fi
+        sudo usermod -a -G lpadmin "$USER" 2>/dev/null || true
+        sudo cupsctl --remote-admin --remote-any 2>/dev/null || true
         
         # Restart CUPS
-        sudo /etc/init.d/cups restart
+        if command_exists systemctl; then
+            sudo systemctl restart cups 2>/dev/null || true
+        elif [ -x /etc/init.d/cups ]; then
+            sudo /etc/init.d/cups restart 2>/dev/null || true
+        fi
         
-        print_success "CUPS and DS620 PPD installed"
-        print_info "Configure your printer at: https://$(hostname -I | awk '{print $1}'):631/admin/"
-        print_warning "Remember to name your printer 'DS620' (or update config.ini accordingly)"
+        print_success "CUPS printer service configured"
+        print_info "Configure your printer in CUPS at: http://localhost:631/admin/ (or https://$(hostname -I 2>/dev/null | awk '{print $1}'):631/admin/)"
+        print_info "Then set PRINTER in config.ini to your printer name"
     fi
 else
     print_info "Skipping CUPS installation"
@@ -438,7 +440,12 @@ if is_raspberry_pi; then
         if [ "$SKIP_ONLINE_STEPS" = true ]; then
             print_warning "Skipping spidev installation because Internet is unavailable"
         else
-            python3 -m pip install --user spidev
+            VENV_PYTHON="${SCRIPT_DIR}/.venv/bin/python"
+            if [ -x "$VENV_PYTHON" ]; then
+                "$VENV_PYTHON" -m pip install spidev
+            else
+                python3 -m pip install spidev
+            fi
         fi
         
         print_success "LED Ring support configured"
@@ -689,7 +696,7 @@ if is_raspberry_pi; then
         PHOTOBOOTH_USER=$(id -un)
         PHOTOBOOTH_GROUP=$(id -gn)
         PHOTOBOOTH_DIR_ESCAPED=$(escape_systemd_value "$PHOTOBOOTH_DIR")
-        PHOTOBOOTH_PYTHON_ESCAPED=$(escape_systemd_value "/usr/bin/python3")
+        PHOTOBOOTH_PYTHON_ESCAPED=$(escape_systemd_value "$PHOTOBOOTH_DIR/.venv/bin/python")
         PHOTOBOOTH_APP_ESCAPED=$(escape_systemd_value "$PHOTOBOOTH_DIR/photoboothapp.py")
 
         write_root_file_if_changed "/etc/systemd/system/photobooth.service" "$(cat <<EOF
@@ -771,7 +778,7 @@ fi
 echo ""
 print_info "To start the photobooth manually, run:"
 echo "  cd $SCRIPT_DIR"
-echo "  python3 photoboothapp.py"
+echo "  .venv/bin/python photoboothapp.py"
 echo ""
 print_info "For more information, see INSTALLATION.md and README.md"
 echo ""

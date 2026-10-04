@@ -34,8 +34,14 @@ sudo apt update
 sudo apt-get install -y gcc make build-essential git scons swig
 sudo apt install -y ffmpeg libturbojpeg0 python3-pip libgl1 libgphoto2-dev
 
+# Create and activate a Python virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
 # Install Python dependencies
-pip3 install -r requirements.txt --break-system-packages
+pip install -r requirements.txt
+
+> **Note:** Installing `pycups` requires CUPS development headers on your system (e.g. `libcups2-dev` on Debian/Ubuntu, `cups` on Arch Linux, `cups-devel` on Fedora).
 ```
 
 ### 2. Kiosk Mode Configuration (Optional)
@@ -103,16 +109,8 @@ libcamera-still --autofocus-mode=auto -f -o test.jpg
 If you plan to use a DSLR camera:
 
 ```bash
-# Download and install gPhoto2 updater
-wget https://raw.githubusercontent.com/gonzalo/gphoto2-updater/master/gphoto2-updater.sh
-wget https://raw.githubusercontent.com/gonzalo/gphoto2-updater/master/.env
-chmod +x gphoto2-updater.sh
-sudo ./gphoto2-updater.sh -s
-rm gphoto2-updater.sh .env
-
-# Fix USB access issues
-sudo chmod -x /usr/lib/gvfs/gvfs-gphoto2-volume-monitor
-sudo chmod -x /usr/lib/gvfs/gvfsd-gphoto2
+# Install gPhoto2 and development libraries (Debian/Ubuntu)
+sudo apt install -y gphoto2 libgphoto2-dev
 
 # Test camera connection
 gphoto2 --capture-image
@@ -124,7 +122,7 @@ If you want to print photos directly from the photobooth:
 
 ```bash
 # Install CUPS and drivers
-sudo apt-get install -y cups libcups2-dev python3-cups
+sudo apt-get install -y cups libcups2-dev
 sudo usermod -a -G lpadmin $USER
 sudo cupsctl --remote-admin --remote-any
 
@@ -132,27 +130,27 @@ sudo cupsctl --remote-admin --remote-any
 sudo apt install -y printer-driver-gutenprint
 
 # Restart CUPS service
-sudo /etc/init.d/cups restart
+sudo systemctl restart cups
 ```
 
 **Printer Configuration:**
 1. Connect your printer via USB
-2. Open a web browser and navigate to `https://<raspberry-ip>:631/admin/`
-3. Click "Add Printer" (you'll need to enter your SSH credentials)
+2. Open a web browser and navigate to `https://<raspberry-ip>:631/admin/` (or `http://localhost:631/admin/`)
+3. Click "Add Printer" (you'll need to enter your admin credentials)
 4. Select your printer from the list
-5. Name it `DS620` (or update the name in `config.ini` to match)
-6. Select the appropriate brand and model (e.g., DNP DS620)
+5. Assign a queue name (e.g., your printer model)
+6. Update `PRINTER` in `config.ini` to match that exact name
 
 ### 7. LED Ring Configuration (Optional)
 
-If you're using a WS2812 LED ring:
+If you're using a WS2812 LED ring on Raspberry Pi:
 
 ```bash
 # Enable SPI interface
 sudo sed -i 's/^#dtparam=spi=on/dtparam=spi=on/' /boot/firmware/config.txt
 
-# Install Python SPI library
-pip3 install spidev --break-system-packages
+# Install Python SPI library in the virtual environment
+.venv/bin/pip install spidev
 
 # Reboot to apply changes
 sudo reboot
@@ -170,21 +168,25 @@ Connect your WS2812 LED ring to the Raspberry Pi GPIO pins:
 
 ### 8. Autostart on Boot (Optional)
 
-To automatically start the photobooth when the Raspberry Pi boots:
+To automatically start the photobooth when the system boots:
 
 ```bash
-# Create autostart configuration
-echo '[autostart]' >> ~/.config/wayfire.ini
-echo 'photobooth = /home/pi/photobooth.sh' >> ~/.config/wayfire.ini
+# Create startup script in your home directory
+cat << 'EOF' > "$HOME/photobooth.sh"
+#!/bin/bash
+cd "$HOME/py-photobooth-simple"
+source .venv/bin/activate
+exec python photoboothapp.py
+EOF
+chmod +x "$HOME/photobooth.sh"
 
-# Create startup script
-echo '#!/bin/bash' > /home/pi/photobooth.sh
-echo 'cd /home/pi/photobooth/' >> /home/pi/photobooth.sh
-echo 'python3 photoboothapp.py' >> /home/pi/photobooth.sh
-chmod +x /home/pi/photobooth.sh
+# Create autostart configuration for Wayfire (if using Wayfire)
+mkdir -p ~/.config
+echo '[autostart]' >> ~/.config/wayfire.ini
+echo "photobooth = $HOME/photobooth.sh" >> ~/.config/wayfire.ini
 ```
 
-**Note:** Adjust the path in the script if you've installed the photobooth in a different location.
+**Note:** Adjust the path in the script if you've installed the photobooth in a different directory.
 
 ## Running the Application
 
@@ -192,7 +194,9 @@ To start the photobooth manually:
 
 ```bash
 cd /path/to/photobooth
-python3 photoboothapp.py
+.venv/bin/python photoboothapp.py
+# or:
+# source .venv/bin/activate && python photoboothapp.py
 ```
 
 ## Configuration
