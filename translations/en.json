@@ -131,5 +131,8 @@
   "diagnostic.printer_reason_toner_empty": "Toner empty",
   "diagnostic.printer_reason_not_accepting_jobs": "Not accepting print jobs",
   "diagnostic.printer_reason_stopped": "Printer stopped",
-  "diagnostic.printer_reason_unavailable": "Printer unavailable"
+  "diagnostic.printer_reason_unavailable": "Printer unavailable",
+  "gallery.title": "GALLERY",
+  "gallery.empty": "No photos in the gallery yet.",
+  "gallery.reprint": "REPRINT"
 }

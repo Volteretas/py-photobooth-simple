@@ -160,9 +160,20 @@ class PhotoboothApp(App):
         # Create required directories
         self.tmp_directory = os.path.join(self.DCIM_DIRECTORY, 'tmp')
         self.save_directory = os.path.join(self.DCIM_DIRECTORY, 'save')
+        self.gallery_directory = os.path.join(self.DCIM_DIRECTORY, 'gallery')
+        self.gallery_strips_directory = os.path.join(self.gallery_directory, 'strips')
+        self.gallery_photos_directory = os.path.join(self.gallery_directory, 'photos')
+        self.gallery_small_strips_directory = os.path.join(self.gallery_directory, 'small', 'strips')
         if not os.path.exists(self.DCIM_DIRECTORY): os.makedirs(self.DCIM_DIRECTORY)
         if not os.path.exists(self.tmp_directory): os.makedirs(self.tmp_directory)
         if not os.path.exists(self.save_directory): os.makedirs(self.save_directory)
+        if not os.path.exists(self.gallery_strips_directory): os.makedirs(self.gallery_strips_directory)
+        if not os.path.exists(self.gallery_photos_directory): os.makedirs(self.gallery_photos_directory)
+        if not os.path.exists(self.gallery_small_strips_directory): os.makedirs(self.gallery_small_strips_directory)
+        self.migrate_legacy_gallery_thumbnails()
+        self.last_saved_session_id = None
+        self.last_saved_strip_path = None
+        self.last_saved_photos = []
         self._save_last_template()
         self.stats_store = StatsStore(
             os.path.join(self.save_directory, '.stats.json'),
@@ -283,6 +294,8 @@ class PhotoboothApp(App):
         return os.path.join(self.tmp_directory, 'collage.jpg')
 
     def get_saved_collage(self):
+        if getattr(self, 'last_saved_strip_path', None) and os.path.exists(self.last_saved_strip_path):
+            return self.last_saved_strip_path
         if not self.last_saved_session_directory:
             return None
         path = os.path.join(self.last_saved_session_directory, 'collage.jpg')
@@ -752,54 +765,148 @@ class PhotoboothApp(App):
 
         threading.Thread(target=recover, name='photobooth-device-recovery', daemon=True).start()
 
+    def migrate_legacy_gallery_thumbnails(self):
+        strips_dir = getattr(self, 'gallery_strips_directory', None)
+        small_dir = getattr(self, 'gallery_small_strips_directory', None)
+        if not strips_dir or not os.path.exists(strips_dir) or not small_dir:
+            return
+        os.makedirs(small_dir, exist_ok=True)
+        try:
+            for fname in os.listdir(strips_dir):
+                if fname.lower().endswith('_small.jpg'):
+                    legacy_path = os.path.join(strips_dir, fname)
+                    new_path = os.path.join(small_dir, fname)
+                    if not os.path.exists(new_path):
+                        FileUtils.move_file(legacy_path, new_path)
+                    else:
+                        FileUtils.remove_file(legacy_path)
+        except Exception as exc:
+            Logger.warning('PhotoboothApp: migrate_legacy_gallery_thumbnails error: %s', exc)
+
+    def generate_session_id(self, now=None):
+        if now is None:
+            now = datetime.now()
+        base_id = now.strftime('%Y-%m-%d_%H-%M-%S') + f'_{now.microsecond // 1000:03d}'
+        session_id = base_id
+        counter = 1
+        strips_dir = getattr(self, 'gallery_strips_directory', os.path.join(self.DCIM_DIRECTORY, 'gallery', 'strips'))
+        while os.path.exists(os.path.join(strips_dir, f'{session_id}.jpg')):
+            session_id = f'{base_id}_{counter:02d}'
+            counter += 1
+        return session_id
+
     def save_collage(self):
         Logger.info('PhotoboothApp: save_collage().')
         if not self.ensure_disk_space_or_maintenance():
             raise RuntimeError('Photo storage is almost full')
-        # List existing files
-        all_files = os.listdir(self.tmp_directory)
-        if len(all_files) == 0: return
 
-        # Create new directory
-        now = datetime.now()
-        destination = os.path.join(self.save_directory, now.strftime('%Y%m%d_%H%M%S'))
-        os.makedirs(destination, exist_ok=True)
+        all_files = os.listdir(self.tmp_directory) if os.path.exists(self.tmp_directory) else []
+        if len(all_files) == 0:
+            return None
 
-        # Move to save_directory (exclude small previews and print versions)
-        moved_files = 0
-        for f in all_files:
-            if '_small' in f or '_print' in f: continue
-            src_path = os.path.join(self.tmp_directory, f)
-            dst_path = os.path.join(destination, f)
+        collage_src = self.get_collage()
+        if not os.path.exists(collage_src):
+            Logger.warning('PhotoboothApp: save_collage: collage.jpg not found in tmp')
+            return None
+
+        session_id = self.generate_session_id()
+
+        # 1. Copy collage.jpg -> gallery/strips/{session_id}.jpg
+        strip_dst = os.path.join(self.gallery_strips_directory, f'{session_id}.jpg')
+        FileUtils.copy_file(collage_src, strip_dst)
+
+        # 2. Copy collage_small.jpg -> gallery/small/strips/{session_id}_small.jpg
+        collage_small_src = FileUtils.get_small_path(collage_src)
+        strip_small_dst = os.path.join(self.gallery_small_strips_directory, f'{session_id}_small.jpg')
+        if os.path.exists(collage_small_src):
+            FileUtils.copy_file(collage_small_src, strip_small_dst)
+        else:
             try:
-                FileUtils.move_file(src_path, dst_path)
-                moved_files += 1
-            except FileNotFoundError:
-                Logger.warning('PhotoboothApp: file disappeared before save: %s', src_path)
+                import cv2
+                im = cv2.imread(collage_src)
+                if im is not None:
+                    h, w = im.shape[:2]
+                    target_w = 400
+                    target_h = max(1, int(h * (target_w / w)))
+                    resized = cv2.resize(im, (target_w, target_h), interpolation=cv2.INTER_AREA)
+                    FileUtils.write_image(strip_small_dst, resized)
             except Exception as exc:
-                Logger.error('PhotoboothApp: failed to save %s to %s: %s', src_path, dst_path, exc)
-                raise
+                Logger.warning('PhotoboothApp: could not create small strip thumbnail: %s', exc)
 
-        if moved_files:
-            self.last_saved_session_directory = destination
+        # 3. Copy valid capture-N.jpg -> gallery/photos/{session_id}_01.jpg, {session_id}_02.jpg, ...
+        saved_photos = []
+        i = 0
+        while True:
+            shot_file = self.get_shot(i)
+            if not os.path.exists(shot_file):
+                break
+            photo_dst = os.path.join(self.gallery_photos_directory, f'{session_id}_{i+1:02d}.jpg')
+            FileUtils.copy_file(shot_file, photo_dst)
+            saved_photos.append(photo_dst)
+            i += 1
+
+        self.last_saved_session_id = session_id
+        self.last_saved_strip_path = strip_dst
+        self.last_saved_photos = saved_photos
+
         self._log_disk_space('after_save')
-        session_id = os.path.basename(destination)
-        for _ in range(moved_files):
-            self.stats_store.track_photo_taken(session_id=session_id)
+        self.stats_store.track_photo_taken(session_id=session_id)
+        Logger.info('PhotoboothApp: session saved to gallery id=%s (strip=%s, photos=%d)',
+                    session_id, strip_dst, len(saved_photos))
+        return session_id
 
     def delete_last_saved_session(self):
-        destination = self.last_saved_session_directory
-        if not destination:
+        session_id = getattr(self, 'last_saved_session_id', None)
+        if not session_id:
+            destination = getattr(self, 'last_saved_session_directory', None)
+            if destination and os.path.exists(destination):
+                try:
+                    shutil.rmtree(destination)
+                    self.last_saved_session_directory = None
+                    return True
+                except Exception:
+                    pass
             return False
-        try:
-            shutil.rmtree(destination)
-        except FileNotFoundError:
-            pass
-        except Exception as exc:
-            raise OSError(f'Failed to remove saved session {destination}: {exc}') from exc
-        self.last_saved_session_directory = None
-        Logger.info('PhotoboothApp: removed saved session %s', destination)
+
+        strip_path = os.path.join(self.gallery_strips_directory, f'{session_id}.jpg')
+        strip_small = os.path.join(self.gallery_small_strips_directory, f'{session_id}_small.jpg')
+        legacy_strip_small = os.path.join(self.gallery_strips_directory, f'{session_id}_small.jpg')
+        FileUtils.remove_file(strip_path)
+        FileUtils.remove_file(strip_small)
+        FileUtils.remove_file(legacy_strip_small)
+        for photo_path in getattr(self, 'last_saved_photos', []):
+            FileUtils.remove_file(photo_path)
+
+        if os.path.exists(self.gallery_photos_directory):
+            for f in os.listdir(self.gallery_photos_directory):
+                if f.startswith(f'{session_id}_'):
+                    FileUtils.remove_file(os.path.join(self.gallery_photos_directory, f))
+
+        self.last_saved_session_id = None
+        self.last_saved_strip_path = None
+        self.last_saved_photos = []
+        Logger.info('PhotoboothApp: removed saved gallery session %s', session_id)
         return True
+
+    def trigger_reprint(self, file_path, copies=1):
+        Logger.info('PhotoboothApp: trigger_reprint file=%s copies=%s', file_path, copies)
+        if not self.has_printer():
+            raise PrinterStatusError(self.get_printer_status().get('reasons'))
+        if not self.stats_store.can_print():
+            raise RuntimeError('Print limit reached')
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f'File not found for reprint: {file_path}')
+
+        options = {}
+        if hasattr(self, 'print_formats') and len(self.print_formats) > 0:
+            options = self.print_formats[0].get_print_params()
+        options['copies'] = str(copies)
+        self._log_disk_space('before_reprint')
+
+        task_id = self.devices.print(file_path, options)
+        if task_id:
+            self.stats_store.track_photo_printed()
+        return task_id
 
     def purge_tmp(self):
         # List existing files and delete (including _print versions)

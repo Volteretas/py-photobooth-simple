@@ -121,7 +121,10 @@ ICON_RETAKE = '\u3b82'
 ICON_HOME = '\u4161'
 ICON_TEMPLATE = '\u425e'
 ICON_ADMIN = '\u46c1'
+ICON_GALLERY = '\u3daa'
 ICON_PRINT = '\u458e'
+ICON_PREV = '\u3b6a'
+ICON_NEXT = '\u3b79'
 ICON_SUCCESS = '\u4903'
 ICON_SUCCESS2 = '\u4304'
 ICON_USB = '\u49ba'
@@ -155,6 +158,8 @@ class ScreenMgr(ScreenManager):
     SUCCESS = 'success'
     COPYING = 'copying'
     DIAGNOSTIC = 'diagnostic'
+    GALLERY = 'gallery'
+    GALLERY_DETAIL = 'gallery_detail'
 
     def __init__(self, app, **kwargs):
         Logger.info('ScreenMgr: __init__().')
@@ -171,6 +176,8 @@ class ScreenMgr(ScreenManager):
             self.SUCCESS            : SuccessScreen(app, name=self.SUCCESS),
             self.COPYING            : CopyingScreen(app, name=self.COPYING),
             self.DIAGNOSTIC         : DiagnosticScreen(app, name=self.DIAGNOSTIC),
+            self.GALLERY            : GalleryScreen(app, name=self.GALLERY),
+            self.GALLERY_DETAIL     : GalleryDetailScreen(app, name=self.GALLERY_DETAIL),
         }
         for screen in self.pb_screens.values(): self.add_widget(screen)
 
@@ -385,16 +392,37 @@ class StartScreen(BackgroundScreen):
         )
         self.add_widget(self.btn_admin)
 
-        self.btn_change_template.bind(pos=self._update_admin_button_pos, size=self._update_admin_button_pos)
-        Window.bind(size=self._update_admin_button_pos)
-        self._update_admin_button_pos()
+        self.btn_gallery = make_icon_button(
+            ICON_GALLERY,
+            size=0.075,
+            font=ICON_TTF,
+            pos_hint={'top': 0.985},
+            font_size_fraction=0.035,
+            bgcolor=HOME_COLOR,
+            on_release=self.on_gallery,
+        )
+        self.add_widget(self.btn_gallery)
 
-    def _update_admin_button_pos(self, *args):
+        self.btn_change_template.bind(pos=self._update_buttons_pos, size=self._update_buttons_pos)
+        self.btn_admin.bind(pos=self._update_buttons_pos, size=self._update_buttons_pos)
+        Window.bind(size=self._update_buttons_pos)
+        self._update_buttons_pos()
+
+    def _update_buttons_pos(self, *args):
         margin = min(Window.size) * 0.015
         if self.btn_change_template.opacity > 0:
             self.btn_admin.x = self.btn_change_template.right + margin
         else:
             self.btn_admin.x = self.btn_change_template.x
+        self.btn_gallery.x = self.btn_admin.right + margin
+
+    def _update_admin_button_pos(self, *args):
+        self._update_buttons_pos(*args)
+
+    def on_gallery(self, obj):
+        if obj is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
+        Logger.info('StartScreen: on_gallery().')
+        self.app.transition_to(ScreenMgr.GALLERY)
 
     def on_entry(self, kwargs={}):
         Logger.info('StartScreen: on_entry().')
@@ -404,7 +432,7 @@ class StartScreen(BackgroundScreen):
         else:
             self.btn_change_template.opacity = 0
             self.btn_change_template.disabled = True
-        self._update_admin_button_pos()
+        self._update_buttons_pos()
         # Temporary ponytail: disable StartScreen breeze effect and keep the label static.
         # self.start_label.start_breeze()
         if self.app.STARTSCREEN_SHOW_INSTRUCTIONS:
@@ -1620,22 +1648,8 @@ class CountdownScreen(ColorScreen):
                 if error_details:
                     Logger.error(error_details)
                 self.app.transition_to(ScreenMgr.ERROR, message=self.app.t('processing.error_collage'))
-            elif not self._save_started:
-                # Keep loading visible until the accepted image is safely stored.
-                self._save_started = True
-                self.app.start_photo_task(self.app.save_collage)
-                self._clock_trigger = Clock.schedule_once(self.timer_trigger, 0.2)
-            elif self.app.has_pending_photo_tasks():
-                if self.app.has_pending_photo_tasks_timed_out():
-                    self.app.request_restart()
-                else:
-                    self._clock_trigger = Clock.schedule_once(self.timer_trigger, 0.2)
-            elif self.app.get_pending_photo_error():
-                Logger.error('CountdownScreen: photo save failed.')
-                Logger.error(self.app.get_pending_photo_error())
-                self.app.transition_to(ScreenMgr.ERROR, message=self.app.t('processing.error_photo'))
             else:
-                self.app.transition_to(ScreenMgr.REVIEW, format=self._current_format, saved=True)
+                self.app.transition_to(ScreenMgr.REVIEW, format=self._current_format)
 
     def trigger_event(self, obj, source=None):
         if obj is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
@@ -2395,11 +2409,12 @@ class ProcessingScreen(ColorScreen):
 class PrintStatusPopup(FloatLayout):
     """Non-intrusive print status banner; the underlying review screen keeps all actions and slideshow visible."""
 
-    def __init__(self, app, format_idx, on_dismiss=None, **kwargs):
+    def __init__(self, app, format_idx=0, on_dismiss=None, file_path=None, **kwargs):
         super(PrintStatusPopup, self).__init__(**kwargs)
         self.app = app
         self.format_idx = format_idx
         self.on_dismiss = on_dismiss
+        self.file_path = file_path
         self._clock = None
         self._auto_close_clock = None
         self._close_scheduled = False
@@ -2551,7 +2566,7 @@ class PrintStatusPopup(FloatLayout):
     def _tick(self, obj):
         if self._close_scheduled or self._finished:
             return
-        if self.app.has_pending_photo_tasks():
+        if not self.file_path and self.app.has_pending_photo_tasks():
             if self.app.has_pending_photo_tasks_timed_out():
                 self.app.transition_to(
                     ScreenMgr.ERROR, message=self.app.t('processing.error_save_timeout'),
@@ -2562,12 +2577,13 @@ class PrintStatusPopup(FloatLayout):
             self._clock = Clock.schedule_once(self._tick, 0.2)
             return
 
-        pending_error = self.app.get_pending_photo_error()
-        if pending_error:
-            Logger.error('PrintStatusPopup: save before print failed.')
-            Logger.error(pending_error)
-            self._set_done(self.app.t('print.error_save_failed_title'), self.app.t('print.error_save_failed_body'), error=True)
-            return
+        if not self.file_path:
+            pending_error = self.app.get_pending_photo_error()
+            if pending_error:
+                Logger.error('PrintStatusPopup: save before print failed.')
+                Logger.error(pending_error)
+                self._set_done(self.app.t('print.error_save_failed_title'), self.app.t('print.error_save_failed_body'), error=True)
+                return
 
         if time.monotonic() - self._started_at >= self._timeout:
             if self._print_io_pending and not self._print_started:
@@ -2583,7 +2599,10 @@ class PrintStatusPopup(FloatLayout):
 
         if not self._print_started:
             self.message.text = self.app.t('print.status_sending')
-            self._run_print_io(lambda: self.app.trigger_print(1, self.format_idx), self._print_started_callback)
+            if self.file_path:
+                self._run_print_io(lambda: self.app.trigger_reprint(self.file_path, 1), self._print_started_callback)
+            else:
+                self._run_print_io(lambda: self.app.trigger_print(1, self.format_idx), self._print_started_callback)
             return
 
         self._run_print_io(
@@ -2839,8 +2858,6 @@ class ReviewScreen(ColorScreen):
         if len(self._slides) > 1:
             self._slideshow_clock = Clock.schedule_once(self._advance_slideshow, self._slide_duration)
 
-        if not single_photo:
-            self._save_collage()
         if self.app.SHARE:
             QRCodePopup.preload_async()
 
@@ -3435,3 +3452,641 @@ class QRCodePopup(FloatLayout):
         self._close_scheduled = True
         if self.on_dismiss:
             Clock.schedule_once(lambda dt: self.on_dismiss(), 0)
+
+
+class GalleryScreen(ColorScreen):
+    """
+    +-----------------+
+    |     Gallery     |
+    |  [strip] [strip]|
+    |  [strip] [strip]|
+    +-----------------+
+    """
+    @property
+    def MIN_CARD_WIDTH(self):  return Window.width * 0.10
+    @property
+    def MIN_CARD_HEIGHT(self): return Window.height * 0.20
+    @property
+    def MAX_CARD_WIDTH(self):  return min(Window.width * 0.45, dp(360))
+    @property
+    def MAX_CARD_HEIGHT(self): return min(Window.height * 0.92, dp(540))
+
+    def __init__(self, app, **kwargs):
+        Logger.info('GalleryScreen: __init__().')
+        super(GalleryScreen, self).__init__(**kwargs)
+        self.app = app
+        self._home_timeout_clock = None
+        self.strip_cards = []
+
+        from kivy.uix.gridlayout import GridLayout
+        from kivy.uix.scrollview import ScrollView
+
+        self.scroll_view = ScrollView(
+            size_hint=(1, 1),
+            do_scroll_x=False,
+            do_scroll_y=True,
+            scroll_type=['content', 'bars'],
+            bar_width=dp(6),
+            scroll_distance=dp(10),
+            scroll_timeout=250,
+        )
+
+        self.cards_grid = GridLayout(
+            cols=3,
+            spacing=Window.height * 0.033,
+            padding=Window.height * 0.022,
+            size_hint=(None, None),
+        )
+        self.cards_grid.bind(minimum_height=self.cards_grid.setter('height'))
+        self.cards_grid.bind(minimum_width=self.cards_grid.setter('width'))
+
+        self.grid_container = AnchorLayout(
+            anchor_x='center',
+            anchor_y='center',
+            size_hint=(1, None),
+        )
+        self.grid_container.add_widget(self.cards_grid)
+
+        self.cards_grid.bind(height=self._update_container_height)
+        self.scroll_view.bind(height=self._update_container_height)
+        self.scroll_view.bind(width=self.grid_container.setter('width'))
+
+        self.scroll_view.add_widget(self.grid_container)
+        self.add_widget(self.scroll_view)
+
+        # Empty state label
+        self.empty_label = Label(
+            text=self.app.t('gallery.empty', default='No photos in the gallery yet.'),
+            font_size=NORMAL_FONT(),
+            font_name=MONTSERRAT_SEMIBOLD_TTF,
+            halign='center',
+            valign='middle',
+            color=(0.9, 0.9, 0.9, 1),
+            size_hint=(0.8, 0.2),
+            pos_hint={'center_x': 0.5, 'center_y': 0.5},
+            opacity=0,
+        )
+        wh_bind(self.empty_label, 'font_size', NORMAL_FONT)
+        self.empty_label.bind(size=self.empty_label.setter('text_size'))
+        self.add_widget(self.empty_label)
+
+        self.btn_back = make_icon_button(
+            ICON_CANCEL,
+            size=0.075,
+            font=ICON_TTF,
+            pos_hint={'x': 0.015, 'top': 0.985},
+            font_size_fraction=0.035,
+            bgcolor=CANCEL_COLOR,
+            on_release=self.on_back,
+        )
+        self.add_widget(self.btn_back)
+
+        Window.bind(on_resize=self._on_window_resize)
+
+    def _calculate_card_size(self):
+        padding = Window.height * 0.022
+        spacing = Window.height * 0.033
+        border = 2 * BORDER_THINKNESS
+        n_cards = max(1, len(self.strip_cards))
+        aspect = Window.width / Window.height
+
+        if aspect < 0.75:
+            cols = 1
+        elif aspect < 1.2:
+            cols = 2
+        elif aspect < 1.8:
+            cols = 3
+        else:
+            cols = 4
+        cols = min(cols, n_cards)
+
+        n_spacings = max(cols - 1, 0)
+        available_width = Window.width - (2 * padding) - (n_spacings * spacing) - border
+        width_from_w = available_width / max(1, cols)
+
+        available_height = Window.height - (2 * padding) - border
+        width_from_h = available_height / 1.6
+
+        card_width = min(self.MAX_CARD_WIDTH, max(self.MIN_CARD_WIDTH, min(width_from_w, width_from_h)))
+        card_height = min(self.MAX_CARD_HEIGHT, max(self.MIN_CARD_HEIGHT, card_width * 1.6))
+
+        return (card_width, card_height, cols)
+
+    def _update_card_sizes(self):
+        card_width, card_height, cols = self._calculate_card_size()
+        self.cards_grid.cols = cols
+        self.cards_grid.spacing = Window.height * 0.033
+        self.cards_grid.row_default_height = card_height
+        self.cards_grid.row_force_default = True
+
+        for card in self.strip_cards:
+            card.size = (card_width, card_height)
+
+    def _update_container_height(self, *args):
+        if hasattr(self, 'grid_container') and hasattr(self, 'cards_grid') and hasattr(self, 'scroll_view'):
+            self.grid_container.height = max(self.scroll_view.height, self.cards_grid.height)
+
+    def _on_window_resize(self, instance, width, height):
+        self._update_card_sizes()
+        self._update_container_height()
+
+    def _format_session_date(self, session_id):
+        try:
+            parts = session_id.split('_')
+            date_part = parts[0]
+            time_part = parts[1].replace('-', ':')
+            return f"{date_part}  {time_part}"
+        except Exception:
+            return session_id
+
+    @classmethod
+    def get_strips_list(cls, app):
+        strips_dir = getattr(app, 'gallery_strips_directory', None)
+        small_dir = getattr(app, 'gallery_small_strips_directory', None)
+        if not strips_dir or not os.path.exists(strips_dir):
+            return []
+
+        if small_dir:
+            os.makedirs(small_dir, exist_ok=True)
+            try:
+                for fname in os.listdir(strips_dir):
+                    if fname.lower().endswith('_small.jpg'):
+                        legacy_path = os.path.join(strips_dir, fname)
+                        new_path = os.path.join(small_dir, fname)
+                        if not os.path.exists(new_path):
+                            FileUtils.move_file(legacy_path, new_path)
+                        else:
+                            FileUtils.remove_file(legacy_path)
+            except Exception as exc:
+                Logger.warning('GalleryScreen: error migrating legacy thumbnails: %s', exc)
+
+        all_files = os.listdir(strips_dir)
+        strips = []
+        for f in all_files:
+            if not f.lower().endswith('.jpg'):
+                continue
+            if '_small' in f or '_print' in f:
+                continue
+            session_id = os.path.splitext(f)[0]
+            strip_path = os.path.join(strips_dir, f)
+            small_path = None
+            if small_dir:
+                candidate = os.path.join(small_dir, f'{session_id}_small.jpg')
+                if os.path.exists(candidate):
+                    small_path = candidate
+            if not small_path:
+                legacy_candidate = os.path.join(strips_dir, f'{session_id}_small.jpg')
+                if os.path.exists(legacy_candidate):
+                    small_path = legacy_candidate
+                else:
+                    small_path = strip_path
+
+            strips.append({
+                'session_id': session_id,
+                'strip_path': strip_path,
+                'small_path': small_path,
+            })
+
+        strips.sort(key=lambda s: s['session_id'], reverse=True)
+        return strips
+
+    def _get_strips_list(self):
+        return GalleryScreen.get_strips_list(self.app)
+
+    def on_entry(self, kwargs={}):
+        Logger.info('GalleryScreen: on_entry().')
+        self._start_home_timeout()
+        self._refresh_gallery()
+        self.scroll_view.scroll_y = 1.0
+
+    def _refresh_gallery(self):
+        self.cards_grid.clear_widgets()
+        self.strip_cards = []
+
+        strips = self._get_strips_list()
+        if not strips:
+            self.empty_label.opacity = 1
+            self.scroll_view.opacity = 0
+            return
+
+        self.empty_label.opacity = 0
+        self.scroll_view.opacity = 1
+
+        for strip_info in strips:
+            card = self._create_strip_card(strip_info)
+            self.cards_grid.add_widget(card)
+            self.strip_cards.append(card)
+
+        self._update_card_sizes()
+        self.cards_grid.do_layout()
+        self._update_container_height()
+        self.scroll_view.scroll_y = 1.0
+
+    def _create_strip_card(self, strip_info):
+        session_id = strip_info['session_id']
+        small_path = strip_info['small_path']
+        strip_path = strip_info['strip_path']
+
+        class ClickableCard(FeedbackButtonBehavior, BoxLayout):
+            pass
+
+        card = ClickableCard(
+            orientation='vertical',
+            size_hint=(None, None),
+            size=(self.MIN_CARD_WIDTH, self.MIN_CARD_HEIGHT),
+            padding=Window.height * 0.022,
+            spacing=Window.height * 0.011,
+        )
+
+        with card.canvas.before:
+            Color(*hex_to_rgba('#3d4f5c'))
+            card_bg = RoundedRectangle(
+                pos=card.pos,
+                size=card.size,
+                radius=[Window.height * 0.022,]
+            )
+
+        def update_card_bg(instance, value):
+            card_bg.pos = instance.pos
+            card_bg.size = instance.size
+        card.bind(pos=update_card_bg, size=update_card_bg)
+
+        preview_container = AnchorLayout(
+            size_hint=(1, 0.85),
+            anchor_x='center',
+            anchor_y='center',
+            padding=Window.height * 0.015,
+        )
+
+        with preview_container.canvas.before:
+            Color(*hex_to_rgba('#4a5c6a'))
+            preview_bg = RoundedRectangle(
+                pos=preview_container.pos,
+                size=preview_container.size,
+                radius=[Window.height * 0.017,]
+            )
+
+        def update_preview_bg(instance, value):
+            preview_bg.pos = instance.pos
+            preview_bg.size = instance.size
+        preview_container.bind(pos=update_preview_bg, size=update_preview_bg)
+
+        preview_image = Image(
+            source=small_path,
+            size_hint=(None, None),
+            fit_mode='contain',
+        )
+
+        def update_image_size(instance, *args):
+            pad = Window.height * 0.03
+            if preview_container.width <= pad or preview_container.height <= pad:
+                return
+            preview_image.size = (preview_container.width - pad, preview_container.height - pad)
+
+        preview_container.bind(size=update_image_size)
+        preview_image.bind(texture=update_image_size)
+
+        preview_container.add_widget(preview_image)
+        card.add_widget(preview_container)
+
+        date_label = Label(
+            text=self._format_session_date(session_id),
+            size_hint=(1, 0.15),
+            font_size=SMALL_FONT(),
+            font_name=MONTSERRAT_SEMIBOLD_TTF,
+            halign='center',
+            valign='middle',
+            color=(0.95, 0.95, 0.95, 1),
+        )
+        wh_bind(date_label, 'font_size', SMALL_FONT)
+        date_label.bind(size=date_label.setter('text_size'))
+        card.add_widget(date_label)
+
+        card.session_id = session_id
+        card.strip_path = strip_path
+        card.bind(on_release=self.on_strip_selected)
+
+        return card
+
+    def on_strip_selected(self, obj):
+        if obj is not None and getattr(obj, 'last_touch', None) is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
+        Logger.info('GalleryScreen: on_strip_selected(%s).', getattr(obj, 'session_id', ''))
+        self._stop_home_timeout()
+        self.app.transition_to(
+            ScreenMgr.GALLERY_DETAIL,
+            strip_path=obj.strip_path,
+            session_id=obj.session_id,
+        )
+
+    def on_back(self, obj):
+        if obj is not None and getattr(obj, 'last_touch', None) is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
+        Logger.info('GalleryScreen: on_back().')
+        self._stop_home_timeout()
+        self.app.transition_to(ScreenMgr.START)
+
+    def on_keyboard_action(self):
+        self.on_back(None)
+        return True
+
+    def on_exit(self, kwargs={}):
+        Logger.info('GalleryScreen: on_exit().')
+        self._stop_home_timeout()
+
+    def on_touch_down(self, touch):
+        if self.app.get_current_screen_name() == ScreenMgr.GALLERY:
+            self._start_home_timeout()
+        return super(GalleryScreen, self).on_touch_down(touch)
+
+    def on_touch_move(self, touch):
+        if self.app.get_current_screen_name() == ScreenMgr.GALLERY:
+            self._start_home_timeout()
+        return super(GalleryScreen, self).on_touch_move(touch)
+
+    def _start_home_timeout(self):
+        self._stop_home_timeout()
+        self._home_timeout_clock = Clock.schedule_once(self.home_timeout_event, 45)
+
+    def _stop_home_timeout(self):
+        if self._home_timeout_clock:
+            self._home_timeout_clock.cancel()
+            self._home_timeout_clock = None
+
+    def home_timeout_event(self, obj):
+        Logger.info('GalleryScreen: home_timeout_event().')
+        self._stop_home_timeout()
+        self.app.transition_to(ScreenMgr.START)
+
+
+class GalleryDetailScreen(ColorScreen):
+    """
+    +---------------------------------+
+    | [Back]   YYYY-MM-DD  HH:MM   [Print] |
+    |                                 |
+    |          [ Full Strip ]         |
+    |                                 |
+    +---------------------------------+
+    """
+    def __init__(self, app, **kwargs):
+        Logger.info('GalleryDetailScreen: __init__().')
+        super(GalleryDetailScreen, self).__init__(**kwargs)
+        self.app = app
+        self._strip_path = None
+        self._session_id = None
+        self._strips = []
+        self._current_index = 0
+        self._home_timeout_clock = None
+        self.print_popup = None
+
+        self.layout = FloatLayout()
+
+        # Full size strip image
+        self.strip_image = Image(
+            size_hint=(0.85, 0.85),
+            pos_hint={'center_x': 0.5, 'center_y': 0.48},
+            fit_mode='contain',
+        )
+        self.layout.add_widget(self.strip_image)
+
+        # Back button top left
+        self.btn_back = make_icon_button(
+            ICON_CANCEL,
+            size=0.075,
+            font=ICON_TTF,
+            pos_hint={'x': 0.015, 'top': 0.985},
+            font_size_fraction=0.035,
+            bgcolor=CANCEL_COLOR,
+            on_release=self.on_back,
+        )
+        self.layout.add_widget(self.btn_back)
+
+        # Date label top center
+        self.date_label = Label(
+            text='',
+            size_hint=(0.5, 0.075),
+            pos_hint={'center_x': 0.5, 'top': 0.985},
+            font_size=SMALL_FONT(),
+            font_name=MONTSERRAT_SEMIBOLD_TTF,
+            halign='center',
+            valign='middle',
+            color=(0.95, 0.95, 0.95, 1),
+        )
+        wh_bind(self.date_label, 'font_size', SMALL_FONT)
+        self.date_label.bind(size=self.date_label.setter('text_size'))
+        self.layout.add_widget(self.date_label)
+
+        # Print / Reprint button top right
+        self.btn_print = make_icon_button(
+            ICON_PRINT,
+            size=0.075,
+            font=ICON_TTF,
+            pos_hint={'right': 0.985, 'top': 0.985},
+            font_size_fraction=0.035,
+            bgcolor=CONFIRM_COLOR,
+            on_release=self.on_reprint,
+        )
+        self.layout.add_widget(self.btn_print)
+
+        # Previous (left arrow) button
+        self.btn_prev = make_icon_button(
+            ICON_PREV,
+            size=0.08,
+            font=ICON_TTF,
+            pos_hint={'x': 0.015, 'center_y': 0.48},
+            font_size_fraction=0.04,
+            bgcolor=HOME_COLOR,
+            on_release=self.on_prev_strip,
+        )
+        self.layout.add_widget(self.btn_prev)
+
+        # Next (right arrow) button
+        self.btn_next = make_icon_button(
+            ICON_NEXT,
+            size=0.08,
+            font=ICON_TTF,
+            pos_hint={'right': 0.985, 'center_y': 0.48},
+            font_size_fraction=0.04,
+            bgcolor=HOME_COLOR,
+            on_release=self.on_next_strip,
+        )
+        self.layout.add_widget(self.btn_next)
+
+        self.add_widget(self.layout)
+
+    def _get_strips_list(self):
+        if hasattr(self.app, 'get_screen'):
+            try:
+                gallery_screen = self.app.get_screen(ScreenMgr.GALLERY)
+                if gallery_screen and hasattr(gallery_screen, '_get_strips_list'):
+                    return gallery_screen._get_strips_list()
+            except Exception:
+                pass
+        return GalleryScreen.get_strips_list(self.app)
+
+    def _format_session_date(self, session_id):
+        try:
+            parts = (session_id or '').split('_')
+            date_part = parts[0]
+            time_part = parts[1].replace('-', ':')
+            return f"{date_part}  {time_part}"
+        except Exception:
+            return session_id or ''
+
+    def _show_strip_at_index(self, index):
+        if not self._strips:
+            self._strip_path = None
+            self._session_id = None
+            self.strip_image.source = ''
+            self.strip_image.opacity = 0
+            self.date_label.text = ''
+            self._update_navigation_buttons()
+            return
+
+        index = max(0, min(index, len(self._strips) - 1))
+        self._current_index = index
+        strip_info = self._strips[index]
+        self._strip_path = strip_info['strip_path']
+        self._session_id = strip_info['session_id']
+
+        if self._strip_path and os.path.exists(self._strip_path):
+            self.strip_image.source = self._strip_path
+            self.strip_image.reload()
+            self.strip_image.opacity = 1
+        else:
+            self.strip_image.source = ''
+            self.strip_image.opacity = 0
+
+        self.date_label.text = self._format_session_date(self._session_id)
+        self._update_navigation_buttons()
+
+    def _update_navigation_buttons(self):
+        total = len(self._strips)
+        has_prev = (total > 0 and self._current_index > 0)
+        self.btn_prev.disabled = not has_prev
+        self.btn_prev.opacity = 1.0 if has_prev else 0.0
+
+        has_next = (total > 0 and self._current_index < total - 1)
+        self.btn_next.disabled = not has_next
+        self.btn_next.opacity = 1.0 if has_next else 0.0
+
+    def on_prev_strip(self, obj):
+        if obj is not None and getattr(obj, 'last_touch', None) is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
+        if self.print_popup and self.print_popup.parent:
+            return
+        Logger.info('GalleryDetailScreen: on_prev_strip().')
+        self._start_home_timeout()
+        if self._current_index > 0:
+            self._show_strip_at_index(self._current_index - 1)
+
+    def on_next_strip(self, obj):
+        if obj is not None and getattr(obj, 'last_touch', None) is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
+        if self.print_popup and self.print_popup.parent:
+            return
+        Logger.info('GalleryDetailScreen: on_next_strip().')
+        self._start_home_timeout()
+        if self._current_index < len(self._strips) - 1:
+            self._show_strip_at_index(self._current_index + 1)
+
+    def on_entry(self, kwargs={}):
+        Logger.info('GalleryDetailScreen: on_entry().')
+        strip_path = kwargs.get('strip_path')
+        session_id = kwargs.get('session_id')
+
+        self._strips = self._get_strips_list()
+
+        target_index = -1
+        if session_id:
+            for idx, item in enumerate(self._strips):
+                if item['session_id'] == session_id:
+                    target_index = idx
+                    break
+        if target_index == -1 and strip_path:
+            for idx, item in enumerate(self._strips):
+                if item['strip_path'] == strip_path:
+                    target_index = idx
+                    break
+
+        if target_index != -1:
+            self._current_index = target_index
+        elif strip_path:
+            inferred_session = session_id or os.path.splitext(os.path.basename(strip_path))[0]
+            self._strips = [{
+                'session_id': inferred_session,
+                'strip_path': strip_path,
+                'small_path': strip_path,
+            }]
+            self._current_index = 0
+        else:
+            self._current_index = 0
+
+        self._show_strip_at_index(self._current_index)
+
+        has_printer = self.app.has_printer() if hasattr(self.app, 'has_printer') else False
+        self.btn_print.disabled = not has_printer
+        self.btn_print.opacity = 1.0 if has_printer else 0.5
+        self._start_home_timeout()
+
+    def on_exit(self, kwargs={}):
+        Logger.info('GalleryDetailScreen: on_exit().')
+        self._stop_home_timeout()
+        if self.print_popup and self.print_popup.parent:
+            self.layout.remove_widget(self.print_popup)
+            self.print_popup = None
+        # Unload high resolution image on exit to release texture memory
+        self.strip_image.source = ''
+
+    def on_reprint(self, obj):
+        if obj is not None and getattr(obj, 'last_touch', None) is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
+        Logger.info('GalleryDetailScreen: on_reprint(%s).', self._strip_path)
+        self._start_home_timeout()
+        if self.print_popup and self.print_popup.parent:
+            return
+        if not self._strip_path or not os.path.exists(self._strip_path):
+            Logger.warning('GalleryDetailScreen: no valid strip to reprint')
+            return
+
+        self.btn_print.disabled = True
+        self.btn_print.opacity = 0.5
+        self.print_popup = PrintStatusPopup(
+            self.app,
+            on_dismiss=self._dismiss_print_popup,
+            file_path=self._strip_path,
+        )
+        self.layout.add_widget(self.print_popup)
+
+    def _dismiss_print_popup(self):
+        if self.print_popup and self.print_popup.parent:
+            self.layout.remove_widget(self.print_popup)
+            self.print_popup = None
+        has_printer = self.app.has_printer() if hasattr(self.app, 'has_printer') else False
+        self.btn_print.disabled = not has_printer
+        self.btn_print.opacity = 1.0 if has_printer else 0.5
+        self._start_home_timeout()
+
+    def on_back(self, obj):
+        if obj is not None and getattr(obj, 'last_touch', None) is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
+        Logger.info('GalleryDetailScreen: on_back().')
+        self._stop_home_timeout()
+        self.app.transition_to(ScreenMgr.GALLERY)
+
+    def on_touch_down(self, touch):
+        if self.app.get_current_screen_name() == ScreenMgr.GALLERY_DETAIL:
+            self._start_home_timeout()
+        return super(GalleryDetailScreen, self).on_touch_down(touch)
+
+    def _start_home_timeout(self):
+        self._stop_home_timeout()
+        self._home_timeout_clock = Clock.schedule_once(self.home_timeout_event, 45)
+
+    def _stop_home_timeout(self):
+        if self._home_timeout_clock:
+            self._home_timeout_clock.cancel()
+            self._home_timeout_clock = None
+
+    def home_timeout_event(self, obj):
+        Logger.info('GalleryDetailScreen: home_timeout_event().')
+        self._stop_home_timeout()
+        self.app.transition_to(ScreenMgr.GALLERY)
+
+    def on_keyboard_action(self):
+        self.on_back(None)
+        return True

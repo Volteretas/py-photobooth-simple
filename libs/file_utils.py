@@ -1,4 +1,5 @@
 import os
+import shutil
 import tempfile
 import cv2
 import numpy as np
@@ -60,6 +61,25 @@ class FileUtils:
             os.replace(src_path, dst_path)
         except Exception as exc:
             raise OSError(f'Failed to move {src_path} to {dst_path}: {exc}') from exc
+
+        return dst_path
+
+    @staticmethod
+    def copy_file(src_path, dst_path):
+        """Copy a file and raise with context on failure."""
+        src_path = os.fspath(src_path)
+        dst_path = os.fspath(dst_path)
+
+        if not os.path.isfile(src_path):
+            raise FileNotFoundError(f'Source file does not exist: {src_path}')
+
+        dst_dir = os.path.dirname(dst_path) or '.'
+        os.makedirs(dst_dir, exist_ok=True)
+
+        try:
+            shutil.copy2(src_path, dst_path)
+        except Exception as exc:
+            raise OSError(f'Failed to copy {src_path} to {dst_path}: {exc}') from exc
 
         return dst_path
 
