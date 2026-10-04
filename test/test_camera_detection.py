@@ -289,5 +289,138 @@ class TestStartScreenAdminButton(unittest.TestCase):
             self.assertTrue(url.endswith(':5000/admin'))
 
 
+class TestAdminConfigReviewAndFeedback(unittest.TestCase):
+    """Tests for Review slideshow and Feedback configuration in the web admin panel."""
+
+    def setUp(self):
+        self.ws = WebServer(save_directory='./DCIM')
+
+    def test_1_fields_appear_in_admin_panel(self):
+        """1. Both Feedback and Review slideshow fields appear in the admin panel."""
+        sections = self.ws._get_config_form_sections()
+
+        # Check Review slideshow section and field
+        review_section = next((s for s in sections if s['title'] == 'Review slideshow'), None)
+        self.assertIsNotNone(review_section, "Section 'Review slideshow' not found in config form sections")
+        review_field = next((f for f in review_section['fields'] if f['option'] == 'SLIDE_DURATION'), None)
+        self.assertIsNotNone(review_field, "Option 'SLIDE_DURATION' not found in Review section")
+        self.assertEqual(review_field['section'], 'Review')
+        self.assertEqual(review_field['control'], 'number')
+        self.assertEqual(review_field['number_type'], 'float')
+        self.assertGreaterEqual(review_field['step'], 0.1)
+
+        # Check Feedback section and field
+        feedback_section = next((s for s in sections if s['title'] == 'Feedback'), None)
+        self.assertIsNotNone(feedback_section, "Section 'Feedback' not found in config form sections")
+        feedback_field = next((f for f in feedback_section['fields'] if f['option'] == 'ENABLED'), None)
+        self.assertIsNotNone(feedback_field, "Option 'ENABLED' not found in Feedback section")
+        self.assertEqual(feedback_field['section'], 'Feedback')
+        self.assertEqual(feedback_field['control'], 'checkbox')
+
+    def test_2_fields_read_configured_values_and_defaults(self):
+        """2. Both fields correctly read current values from config, or default when missing."""
+        sample_ini = (
+            "[Review]\n"
+            "SLIDE_DURATION = 3.5\n"
+            "CROSSFADE_DURATION = 0.45\n\n"
+            "[Feedback]\n"
+            "ENABLED = True\n"
+        )
+        with patch.object(self.ws, '_load_config_text', return_value=sample_ini):
+            sections = self.ws._get_config_form_sections()
+            review_field = next(f for s in sections if s['title'] == 'Review slideshow' for f in s['fields'] if f['option'] == 'SLIDE_DURATION')
+            feedback_field = next(f for s in sections if s['title'] == 'Feedback' for f in s['fields'] if f['option'] == 'ENABLED')
+
+            self.assertEqual(review_field['value'], '3.5')
+            self.assertEqual(feedback_field['value'], True)
+            self.assertTrue(feedback_field['checked'])
+
+        # Test with Feedback = False and Review = 1.8
+        sample_ini_disabled = (
+            "[Review]\n"
+            "SLIDE_DURATION = 1.8\n\n"
+            "[Feedback]\n"
+            "ENABLED = False\n"
+        )
+        with patch.object(self.ws, '_load_config_text', return_value=sample_ini_disabled):
+            sections = self.ws._get_config_form_sections()
+            review_field = next(f for s in sections if s['title'] == 'Review slideshow' for f in s['fields'] if f['option'] == 'SLIDE_DURATION')
+            feedback_field = next(f for s in sections if s['title'] == 'Feedback' for f in s['fields'] if f['option'] == 'ENABLED')
+
+            self.assertEqual(review_field['value'], '1.8')
+            self.assertEqual(feedback_field['value'], False)
+            self.assertFalse(feedback_field['checked'])
+
+        # Test when [Review] and [Feedback] are missing from config
+        minimal_ini = "[Global]\nFULLSCREEN = False\n"
+        with patch.object(self.ws, '_load_config_text', return_value=minimal_ini):
+            sections = self.ws._get_config_form_sections()
+            review_field = next(f for s in sections if s['title'] == 'Review slideshow' for f in s['fields'] if f['option'] == 'SLIDE_DURATION')
+            feedback_field = next(f for s in sections if s['title'] == 'Feedback' for f in s['fields'] if f['option'] == 'ENABLED')
+
+            self.assertEqual(review_field['value'], '2.0')
+            self.assertFalse(feedback_field['checked'])
+
+    def test_3_save_feedback_enabled_true_and_false(self):
+        """3. Saving Feedback ENABLED as True or False updates config correctly."""
+        base_ini = (
+            "[Review]\n"
+            "SLIDE_DURATION = 2.0\n\n"
+            "[Feedback]\n"
+            "# Rating screen\n"
+            "ENABLED = False\n"
+        )
+        # Update Feedback to True
+        updates_true = {('Feedback', 'ENABLED'): 'True'}
+        result_true = self.ws._apply_config_updates(base_ini, updates_true)
+        self.assertIn("ENABLED = True", result_true)
+        self.assertNotIn("ENABLED = False", result_true)
+        self.assertIn("# Rating screen", result_true)
+        self.assertIn("SLIDE_DURATION = 2.0", result_true)
+
+        # Update Feedback to False
+        base_ini_enabled = (
+            "[Feedback]\n"
+            "ENABLED = True\n"
+        )
+        updates_false = {('Feedback', 'ENABLED'): 'False'}
+        result_false = self.ws._apply_config_updates(base_ini_enabled, updates_false)
+        self.assertIn("ENABLED = False", result_false)
+        self.assertNotIn("ENABLED = True", result_false)
+
+        # Verify coercion logic for checkbox
+        feedback_spec = self.ws._get_config_field_spec('Feedback', 'ENABLED')
+        self.assertEqual(self.ws._coerce_form_field_value(feedback_spec, True, 'False'), 'True')
+        self.assertEqual(self.ws._coerce_form_field_value(feedback_spec, False, 'True'), 'False')
+
+    def test_4_save_slide_duration_decimal(self):
+        """4. Saving SLIDE_DURATION with a decimal value updates config and preserves other settings."""
+        base_ini = (
+            "[Review]\n"
+            "# Slide duration\n"
+            "SLIDE_DURATION = 2.0\n"
+            "CROSSFADE_DURATION = 0.45\n\n"
+            "[Feedback]\n"
+            "ENABLED = False\n"
+        )
+        updates = {('Review', 'SLIDE_DURATION'): '2.5'}
+        result = self.ws._apply_config_updates(base_ini, updates)
+        self.assertIn("SLIDE_DURATION = 2.5", result)
+        self.assertIn("CROSSFADE_DURATION = 0.45", result)
+        self.assertIn("# Slide duration", result)
+        self.assertIn("ENABLED = False", result)
+
+        # Verify coercion logic for float field
+        review_spec = self.ws._get_config_field_spec('Review', 'SLIDE_DURATION')
+        self.assertEqual(self.ws._coerce_form_field_value(review_spec, '2.5', '2.0'), '2.5')
+        self.assertEqual(self.ws._coerce_form_field_value(review_spec, '0.5', '2.0'), '0.5')
+        # Empty raises ValueError
+        with self.assertRaises(ValueError):
+            self.ws._coerce_form_field_value(review_spec, '', '2.0')
+        # Value below min raises ValueError
+        with self.assertRaises(ValueError):
+            self.ws._coerce_form_field_value(review_spec, '0.1', '2.0')
+
+
 if __name__ == '__main__':
     unittest.main()

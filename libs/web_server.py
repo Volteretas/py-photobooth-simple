@@ -135,6 +135,38 @@ class WebServer:
             ),
         },
         {
+            'title': 'Review slideshow',
+            'description': 'Configure captured photo slideshow duration during review.',
+            'fields': (
+                {
+                    'section': 'Review',
+                    'option': 'SLIDE_DURATION',
+                    'label': 'Slide duration (seconds)',
+                    'control': 'number',
+                    'number_type': 'float',
+                    'min': 0.5,
+                    'step': 0.1,
+                    'default': 2.0,
+                    'placeholder': '2.0',
+                    'help': 'Duration in seconds to display each photo in the review slideshow before showing the collage.',
+                },
+            ),
+        },
+        {
+            'title': 'Feedback',
+            'description': 'Customer feedback rating screen settings.',
+            'fields': (
+                {
+                    'section': 'Feedback',
+                    'option': 'ENABLED',
+                    'label': 'Enable feedback screen',
+                    'control': 'checkbox',
+                    'default': False,
+                    'help': 'Display the rating screen (SuccessScreen) after each session.',
+                },
+            ),
+        },
+        {
             'title': 'Storage',
             'description': 'Disk paths and safeguards against full storage.',
             'fields': (
