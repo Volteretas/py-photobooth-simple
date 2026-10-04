@@ -1135,6 +1135,13 @@ class WebServer:
                 if not requested_filename:
                     filename = self._get_unique_template_filename(filename)
 
+                # Ensure print_params.PageSize is "4x6in" for all templates created/saved from Web Admin
+                print_params = template_data.get('print_params')
+                if not isinstance(print_params, dict):
+                    print_params = {}
+                    template_data['print_params'] = print_params
+                print_params['PageSize'] = '4x6in'
+
                 template_path = os.path.join(self.templates_directory, filename)
                 with open(template_path, 'w', encoding='utf-8') as handle:
                     json.dump(template_data, handle, indent=2, ensure_ascii=False)

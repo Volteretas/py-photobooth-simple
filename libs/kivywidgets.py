@@ -764,6 +764,7 @@ def make_icon_button(icon, size, pos_hint={}, font='Roboto', font_size=sp(10), f
         wh_fraction=font_size_fraction,
     )
     parent.add_widget(ic)
+    parent.icon_widget = ic
     if badge:
         bg = LabelRoundButton(
             text=badge,

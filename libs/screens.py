@@ -137,6 +137,8 @@ ICON_DIAGNOSTIC_ERROR = '\u3d45'
 ICON_DIAGNOSTIC_DISABLED = '\u43ae'
 ICON_THUMB_UP = '\u4905'
 ICON_THUMB_DOWN = '\u4901'
+ICON_FULLSCREEN = '\u433e'
+ICON_WINDOWED = '\u43a4'
 
 
 def _escape_kivy_markup(value):
@@ -182,13 +184,16 @@ class ScreenMgr(ScreenManager):
         for screen in self.pb_screens.values(): self.add_widget(screen)
 
         self.current = self.START
-        if self.app.FULLSCREEN: Window.fullscreen = True
+        if self.app.FULLSCREEN: Window.fullscreen = 'auto'
         Window.bind(on_key_down=self._on_key_down)
 
     def _on_key_down(self, window, keycode, scancode, codepoint, modifiers):
-        if keycode == 27:  # ESC: kiosk keyboard back/home, never quit Kivy.
+        if keycode == 27:  # ESC: kiosk keyboard back/home, or exit fullscreen on StartScreen
             if self.current != self.START:
                 self.app.transition_to(self.START)
+            else:
+                if Window.fullscreen:
+                    Window.fullscreen = False
             return True
         if keycode in (13, 32):  # ENTER / SPACE: activate the screen's primary button.
             action = getattr(self.current_screen, 'on_keyboard_action', None)
@@ -359,11 +364,34 @@ class StartScreen(BackgroundScreen):
 
         self.add_widget(overlay_layout)
 
+        self.btn_close = make_icon_button(
+            ICON_CANCEL,
+            size=0.075,
+            font=ICON_TTF,
+            pos_hint={'right': 0.985, 'top': 0.985},
+            font_size_fraction=0.035,
+            bgcolor=CANCEL_COLOR,
+            on_release=self.on_close_app,
+        )
+        self.add_widget(self.btn_close)
+
+        is_fs = bool(Window.fullscreen)
+        self.btn_fullscreen = make_icon_button(
+            ICON_WINDOWED if is_fs else ICON_FULLSCREEN,
+            size=0.075,
+            font=ICON_TTF,
+            pos_hint={'top': 0.985},
+            font_size_fraction=0.035,
+            bgcolor=HOME_COLOR,
+            on_release=self.on_toggle_fullscreen,
+        )
+        self.add_widget(self.btn_fullscreen)
+
         self.diagnostic_button = make_icon_button(
             ICON_DIAGNOSTIC,
             size=0.075,
             font=ICON_TTF,
-            pos_hint={'right': 0.985, 'top': 0.985},
+            pos_hint={'top': 0.985},
             font_size_fraction=0.035,
             bgcolor=(*label_color[:3], 0),
             on_release=self.on_diagnostic,
@@ -405,7 +433,9 @@ class StartScreen(BackgroundScreen):
 
         self.btn_change_template.bind(pos=self._update_buttons_pos, size=self._update_buttons_pos)
         self.btn_admin.bind(pos=self._update_buttons_pos, size=self._update_buttons_pos)
+        self.btn_close.bind(pos=self._update_buttons_pos, size=self._update_buttons_pos)
         Window.bind(size=self._update_buttons_pos)
+        Window.bind(fullscreen=self._update_fullscreen_icon)
         self._update_buttons_pos()
 
     def _update_buttons_pos(self, *args):
@@ -416,8 +446,35 @@ class StartScreen(BackgroundScreen):
             self.btn_admin.x = self.btn_change_template.x
         self.btn_gallery.x = self.btn_admin.right + margin
 
+        if hasattr(self, 'btn_close') and hasattr(self, 'btn_fullscreen') and hasattr(self, 'diagnostic_button'):
+            self.btn_fullscreen.x = self.btn_close.x - self.btn_fullscreen.width - margin
+            self.diagnostic_button.x = self.btn_fullscreen.x - self.diagnostic_button.width - margin
+
     def _update_admin_button_pos(self, *args):
         self._update_buttons_pos(*args)
+
+    def _update_fullscreen_icon(self, *args):
+        if hasattr(self, 'btn_fullscreen'):
+            is_fs = bool(Window.fullscreen)
+            icon = ICON_WINDOWED if is_fs else ICON_FULLSCREEN
+            if hasattr(self.btn_fullscreen, 'icon_widget'):
+                self.btn_fullscreen.icon_widget.text = icon
+            elif self.btn_fullscreen.children:
+                self.btn_fullscreen.children[0].text = icon
+
+    def on_toggle_fullscreen(self, obj):
+        if obj is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
+        Logger.info('StartScreen: on_toggle_fullscreen().')
+        if Window.fullscreen:
+            Window.fullscreen = False
+        else:
+            Window.fullscreen = 'auto'
+        self._update_fullscreen_icon()
+
+    def on_close_app(self, obj):
+        if obj is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
+        Logger.info('StartScreen: on_close_app().')
+        self.app.stop()
 
     def on_gallery(self, obj):
         if obj is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
@@ -432,6 +489,7 @@ class StartScreen(BackgroundScreen):
         else:
             self.btn_change_template.opacity = 0
             self.btn_change_template.disabled = True
+        self._update_fullscreen_icon()
         self._update_buttons_pos()
         # Temporary ponytail: disable StartScreen breeze effect and keep the label static.
         # self.start_label.start_breeze()
@@ -468,9 +526,12 @@ class StartScreen(BackgroundScreen):
     def on_click(self, obj):
         if not isinstance(obj.last_touch, MouseMotionEvent): return
         if self.app.get_current_screen_name() != ScreenMgr.START: return
-        if self.diagnostic_button.collide_point(*obj.last_touch.pos): return
-        if self.btn_change_template.opacity > 0 and self.btn_change_template.collide_point(*obj.last_touch.pos): return
+        if hasattr(self, 'btn_close') and self.btn_close.collide_point(*obj.last_touch.pos): return
+        if hasattr(self, 'btn_fullscreen') and self.btn_fullscreen.collide_point(*obj.last_touch.pos): return
+        if hasattr(self, 'diagnostic_button') and self.diagnostic_button.collide_point(*obj.last_touch.pos): return
+        if hasattr(self, 'btn_change_template') and self.btn_change_template.opacity > 0 and self.btn_change_template.collide_point(*obj.last_touch.pos): return
         if hasattr(self, 'btn_admin') and self.btn_admin.opacity > 0 and self.btn_admin.collide_point(*obj.last_touch.pos): return
+        if hasattr(self, 'btn_gallery') and self.btn_gallery.opacity > 0 and self.btn_gallery.collide_point(*obj.last_touch.pos): return
         Logger.info('StartScreen: on_click().')
         self.app.transition_to(ScreenMgr.COUNTDOWN, shot=0, format=self.app.selected_format)
 
@@ -860,10 +921,14 @@ class SelectFormatScreen(ColorScreen):
         from kivy.uix.gridlayout import GridLayout
         from kivy.uix.scrollview import ScrollView
         
-        scroll_view = ScrollView(
+        self.scroll_view = ScrollView(
             size_hint=(1, 1),
             do_scroll_x=False,
             do_scroll_y=True,
+            scroll_type=['content', 'bars'],
+            bar_width=dp(6),
+            scroll_distance=dp(10),
+            scroll_timeout=250,
         )
         
         # Grid for format cards (centered)
@@ -877,22 +942,23 @@ class SelectFormatScreen(ColorScreen):
         self.cards_grid.bind(minimum_width=self.cards_grid.setter('width'))
         
         # Center the grid within the scroll view
-        grid_container = AnchorLayout(
+        self.grid_container = AnchorLayout(
             anchor_x='center',
             anchor_y='center',
+            size_hint=(1, None),
         )
-        grid_container.add_widget(self.cards_grid)
-        scroll_view.add_widget(grid_container)
+        self.grid_container.add_widget(self.cards_grid)
+
+        self.cards_grid.bind(height=self._update_container_height)
+        self.scroll_view.bind(height=self._update_container_height)
+        self.scroll_view.bind(width=self.grid_container.setter('width'))
+
+        self.scroll_view.add_widget(self.grid_container)
+        self.add_widget(self.scroll_view)
 
         # Build format cards
         self.format_cards = []
-        max_cards = min(3, len(self.app.print_formats))
-        for format_idx in range(max_cards):
-            card = self._create_format_card(format_idx)
-            self.cards_grid.add_widget(card)
-            self.format_cards.append(card)
-
-        self.add_widget(scroll_view)
+        self._build_format_cards()
 
         self.btn_back = make_icon_button(
             ICON_CANCEL,
@@ -907,9 +973,18 @@ class SelectFormatScreen(ColorScreen):
         
         # Bind to window resize events
         Window.bind(on_resize=self._on_window_resize)
-        
-        # Initial card size calculation
+
+    def _build_format_cards(self):
+        """Build format cards for all available print formats."""
+        self.cards_grid.clear_widgets()
+        self.format_cards = []
+        for format_idx in range(len(self.app.print_formats)):
+            card = self._create_format_card(format_idx)
+            self.cards_grid.add_widget(card)
+            self.format_cards.append(card)
+
         self._update_card_sizes()
+        self._update_container_height()
 
     def _calculate_card_size(self):
         """Calculate card size and column count that fills the screen optimally for any aspect ratio."""
@@ -926,12 +1001,12 @@ class SelectFormatScreen(ColorScreen):
             cols = 2
         else:
             cols = 3
-        cols = min(cols, n_cards)
+        cols = min(cols, max(1, n_cards))
 
         # Width from horizontal space
         n_spacings = max(cols - 1, 0)
         available_width = Window.width - (2 * padding) - (n_spacings * spacing) - border
-        width_from_w = available_width / cols
+        width_from_w = available_width / max(1, cols)
 
         # Width derived from vertical space (aspect ratio 1:1.5)
         available_height = Window.height - (2 * padding) - border
@@ -950,13 +1025,26 @@ class SelectFormatScreen(ColorScreen):
         self.cards_grid.spacing = Window.height * 0.033
         self.cards_grid.row_default_height = card_height
         self.cards_grid.row_force_default = True
+        self.cards_grid.col_default_width = card_width
+        self.cards_grid.col_force_default = True
 
         for card in self.format_cards:
             card.size = (card_width, card_height)
+        self._update_container_height()
+
+    def _update_container_height(self, *args):
+        if hasattr(self, 'grid_container') and hasattr(self, 'cards_grid') and hasattr(self, 'scroll_view'):
+            if self.cards_grid.height > self.scroll_view.height:
+                self.grid_container.height = self.cards_grid.height
+                self.grid_container.anchor_y = 'top'
+            else:
+                self.grid_container.height = self.scroll_view.height
+                self.grid_container.anchor_y = 'center'
     
     def _on_window_resize(self, instance, width, height):
         """Handle window resize events."""
         self._update_card_sizes()
+        self._update_container_height()
 
     def _create_format_card(self, format_idx):
         """Create a card for a specific format."""
@@ -1072,6 +1160,10 @@ class SelectFormatScreen(ColorScreen):
         # Previously: reloaded all previews on every entry (slow)
         # Now: previews are generated once and cached in TemplateCollage
         self._source_screen = kwargs.get('source_screen', kwargs.get('return_to', ScreenMgr.START))
+        if len(self.format_cards) != len(self.app.print_formats):
+            self._build_format_cards()
+        if hasattr(self, 'scroll_view'):
+            self.scroll_view.scroll_y = 1.0
         self._start_home_timeout()
         if self.app.ringled:
             self.app.ringled.start_rainbow()
@@ -1086,6 +1178,11 @@ class SelectFormatScreen(ColorScreen):
         if self.app.get_current_screen_name() == ScreenMgr.SELECT_FORMAT:
             self._start_home_timeout()
         return super(SelectFormatScreen, self).on_touch_down(touch)
+
+    def on_touch_move(self, touch):
+        if self.app.get_current_screen_name() == ScreenMgr.SELECT_FORMAT:
+            self._start_home_timeout()
+        return super(SelectFormatScreen, self).on_touch_move(touch)
 
     def _start_home_timeout(self):
         Logger.info('SelectFormatScreen: _start_home_timeout().')
@@ -2698,13 +2795,12 @@ class ReviewScreen(ColorScreen):
         self._slide_token = 0
         self._slide_duration = getattr(self.app, 'REVIEW_SLIDE_DURATION', REVIEW_SLIDE_DURATION_SECONDS)
         self._crossfade_duration = getattr(self.app, 'REVIEW_CROSSFADE_DURATION', REVIEW_CROSSFADE_DURATION_SECONDS)
-        self.layout = AnchorLayout(padding=BORDER_THINKNESS, anchor_x='center', anchor_y='top')
-        self.overlay_layout = FloatLayout()
-        self.layout.add_widget(self.overlay_layout)
+        self.layout = FloatLayout()
+        self.add_widget(self.layout)
 
-        # Image preview container supporting dual-layer smooth crossfade
+        # Image preview container supporting dual-layer smooth crossfade (background layer)
         self.image_container = FloatLayout(size_hint=(1, 1), pos_hint={'x': 0, 'y': 0})
-        self.overlay_layout.add_widget(self.image_container)
+        self.layout.add_widget(self.image_container)
 
         self.preview_a = BlurredImage(
             blur=self.app.BLUR_COLLAGE,
@@ -2726,6 +2822,10 @@ class ReviewScreen(ColorScreen):
         self._current_preview = self.preview_a
         self._next_preview = self.preview_b
         self.preview = self.preview_a
+
+        # Independent controls overlay (foreground layer decoupled from image size/ratio)
+        self.overlay_layout = FloatLayout(size_hint=(1, 1), pos_hint={'x': 0, 'y': 0})
+        self.layout.add_widget(self.overlay_layout)
 
         self.btn_home = make_icon_button(
             ICON_HOME,
@@ -2781,8 +2881,9 @@ class ReviewScreen(ColorScreen):
             self.overlay_layout.add_widget(self.btn_share)
 
         self.overlay_layout.bind(size=self._layout_action_buttons)
+        self.bind(size=self._layout_action_buttons)
+        Window.bind(size=self._layout_action_buttons)
         Clock.schedule_once(self._layout_action_buttons, 0)
-        self.add_widget(self.layout)
 
     def _action_buttons(self):
         buttons = []
@@ -2809,18 +2910,45 @@ class ReviewScreen(ColorScreen):
         buttons = self._action_buttons()
         if not buttons:
             return
-        bottom = max(dp(4), self.overlay_layout.height * 0.05)
-        gap = max(dp(4), self.overlay_layout.height * 0.02)
-        top = max(dp(4), self.overlay_layout.height * 0.05)
-        max_h = max(dp(18), (self.overlay_layout.height - bottom - top - gap * (len(buttons) - 1)) / len(buttons))
+        avail_w = self.overlay_layout.width or self.width or Window.width
+        avail_h = self.overlay_layout.height or self.height or Window.height
+        if avail_w <= 0 or avail_h <= 0:
+            return
+
+        bottom = max(dp(4), avail_h * 0.05)
+        top_margin = max(dp(4), avail_h * 0.05)
+        gap = max(dp(4), avail_h * 0.02)
+        right = avail_w * 0.95
+
+        n = len(buttons)
+        max_h = max(dp(18), (avail_h - bottom - top_margin - gap * (n - 1)) / n)
+        btn_h = min(max_h, max(dp(48), avail_h * 0.09))
+        min_ratio = 2.5
+        btn_w = max(avail_w * 0.16, btn_h * min_ratio)
+        if btn_w > right:
+            btn_w = right
+
         y = bottom
+        positions = []
         for btn in buttons:
-            if btn.height > max_h:
-                btn.height = max_h
+            btn.size_hint = (None, None)
+            btn.size = (btn_w, btn_h)
             btn.pos_hint = {}
-            btn.x = max(0, min(self.overlay_layout.width * 0.95 - btn.width, self.overlay_layout.width - btn.width))
-            btn.y = y
-            y = btn.top + gap
+            bx = max(0, min(right - btn_w, avail_w - btn_w))
+            by = max(0, min(y, avail_h - btn_h))
+            positions.append((btn, bx, by))
+            y = by + btn_h + gap
+
+        # Clamp from top if overflowing
+        if positions:
+            _, _, last_y = positions[-1]
+            if last_y + btn_h > avail_h - top_margin:
+                overflow = (last_y + btn_h) - (avail_h - top_margin)
+                positions = [(b, x, max(0, y_pos - overflow)) for (b, x, y_pos) in positions]
+
+        for btn, bx, by in positions:
+            btn.x = bx
+            btn.y = by
 
     def on_entry(self, kwargs={}):
         Logger.info('ReviewScreen: on_entry().')
