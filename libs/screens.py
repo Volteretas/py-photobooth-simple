@@ -1,6 +1,7 @@
 import threading
 import time
 import io
+import os
 from xml.sax.saxutils import escape as xml_escape
 import cv2
 import numpy as np
@@ -9,7 +10,7 @@ from kivy.logger import Logger
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.anchorlayout import AnchorLayout
-from kivy.graphics import Rectangle, Color
+from kivy.graphics import Rectangle, Color, RoundedRectangle, Line
 from kivy.uix.image import Image
 from kivy.uix.label import Label
 from kivy.uix.screenmanager import Screen, ScreenManager
@@ -355,8 +356,27 @@ class StartScreen(BackgroundScreen):
         )
         self.add_widget(self.diagnostic_button)
 
+        self.btn_change_template = RoundedButton(
+            text=app.t('start.change_template', default='CHANGE TEMPLATE'),
+            font_size=SMALL_FONT(),
+            size_hint=(0.28, 0.075),
+            pos_hint={'x': 0.02, 'top': 0.98},
+            background_color=[0.18, 0.24, 0.32, 0.85],
+            color=label_color,
+            bold=True,
+        )
+        wh_bind(self.btn_change_template, 'font_size', SMALL_FONT)
+        self.btn_change_template.bind(on_release=self.on_change_template)
+        self.add_widget(self.btn_change_template)
+
     def on_entry(self, kwargs={}):
         Logger.info('StartScreen: on_entry().')
+        if len(self.app.print_formats) > 1:
+            self.btn_change_template.opacity = 1
+            self.btn_change_template.disabled = False
+        else:
+            self.btn_change_template.opacity = 0
+            self.btn_change_template.disabled = True
         # Temporary ponytail: disable StartScreen breeze effect and keep the label static.
         # self.start_label.start_breeze()
         if self.app.STARTSCREEN_SHOW_INSTRUCTIONS:
@@ -393,7 +413,13 @@ class StartScreen(BackgroundScreen):
         if not isinstance(obj.last_touch, MouseMotionEvent): return
         if self.app.get_current_screen_name() != ScreenMgr.START: return
         if self.diagnostic_button.collide_point(*obj.last_touch.pos): return
+        if self.btn_change_template.opacity > 0 and self.btn_change_template.collide_point(*obj.last_touch.pos): return
         Logger.info('StartScreen: on_click().')
+        self.app.transition_to(ScreenMgr.COUNTDOWN, shot=0, format=self.app.selected_format)
+
+    def on_change_template(self, obj):
+        if obj is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
+        Logger.info('StartScreen: on_change_template().')
         self.app.transition_to(ScreenMgr.SELECT_FORMAT)
 
     def on_diagnostic(self, obj):
@@ -402,7 +428,7 @@ class StartScreen(BackgroundScreen):
 
     def on_keyboard_action(self):
         Logger.info('StartScreen: on_keyboard_action().')
-        self.app.transition_to(ScreenMgr.SELECT_FORMAT)
+        self.app.transition_to(ScreenMgr.COUNTDOWN, shot=0, format=self.app.selected_format)
         return True
 
 class DiagnosticScreen(ColorScreen):
@@ -781,6 +807,16 @@ class SelectFormatScreen(ColorScreen):
             self.format_cards.append(card)
 
         self.add_widget(scroll_view)
+
+        self.btn_back = make_icon_button(
+            ICON_CANCEL,
+            size=0.075,
+            font=ICON_TTF,
+            pos_hint={'x': 0.015, 'top': 0.985},
+            font_size_fraction=0.035,
+            on_release=self.on_back,
+        )
+        self.add_widget(self.btn_back)
         
         # Bind to window resize events
         Window.bind(on_resize=self._on_window_resize)
@@ -979,11 +1015,24 @@ class SelectFormatScreen(ColorScreen):
         self.app.transition_to(ScreenMgr.START)
 
     def on_format_selected(self, obj):
-        if not isinstance(obj.last_touch, MouseMotionEvent): return
+        if obj is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
         format_idx = obj.format_idx
         Logger.info(f'SelectFormatScreen: on_format_selected({format_idx}).')
         self._stop_home_timeout()
+        self.app.selected_format = format_idx
         self.app.transition_to(ScreenMgr.COUNTDOWN, shot=0, format=format_idx)
+
+    def on_back(self, obj):
+        if obj is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
+        Logger.info('SelectFormatScreen: on_back().')
+        self._stop_home_timeout()
+        self.app.transition_to(ScreenMgr.COUNTDOWN, shot=0, format=self.app.selected_format)
+
+    def on_keyboard_action(self):
+        Logger.info('SelectFormatScreen: on_keyboard_action().')
+        self._stop_home_timeout()
+        self.app.transition_to(ScreenMgr.COUNTDOWN, shot=0, format=self.app.selected_format)
+        return True
 
 class ErrorScreen(ColorScreen):
     """
@@ -1112,6 +1161,29 @@ class ErrorScreen(ColorScreen):
             return True
         return False
 
+
+class ThumbnailSlot(AnchorLayout):
+    def __init__(self, **kwargs):
+        super(ThumbnailSlot, self).__init__(anchor_x='center', anchor_y='center', **kwargs)
+        with self.canvas.before:
+            Color(0, 0, 0, 0.35)
+            self.bg_rect = RoundedRectangle(pos=self.pos, size=self.size, radius=[dp(8)])
+            Color(BORDER_COLOR[0], BORDER_COLOR[1], BORDER_COLOR[2], 0.5)
+            self.border_line = Line(rounded_rectangle=(self.x, self.y, self.width, self.height, dp(8)), width=dp(1.2))
+        self.bind(pos=self._update_rect, size=self._update_rect)
+
+        self.image = Image(
+            size_hint=(1, 1),
+            fit_mode='contain',
+            opacity=0,
+        )
+        self.add_widget(self.image)
+
+    def _update_rect(self, *args):
+        self.bg_rect.pos = self.pos
+        self.bg_rect.size = self.size
+        self.border_line.rounded_rectangle = (self.x, self.y, self.width, self.height, dp(8))
+
 class CountdownScreen(ColorScreen):
     """
     +-----------------+
@@ -1130,6 +1202,10 @@ class CountdownScreen(ColorScreen):
         self._timer_active = False
         self._home_timeout_clock = None
         self._home_progress_clock = None
+        self._clock_pending_tasks = None
+        self._clock_auto_start = None
+        self._clock_purge = None
+        self._auto_start_time = 0.0
         self._collage_started = False
         self._save_started = False
 
@@ -1220,7 +1296,46 @@ class CountdownScreen(ColorScreen):
             on_release=self.trigger_event
         )
 
+        # Photo thumbnails shown on the left side of the live preview.
+        self.thumbnails_container = BoxLayout(
+            orientation='vertical',
+            size_hint=(0.11, 0.52),
+            pos_hint={'x': 0.03, 'center_y': 0.46},
+            spacing=dp(12),
+            padding=dp(4),
+        )
+        self.thumbnail_slots = []
+        for _ in range(3):
+            slot = ThumbnailSlot()
+            self.thumbnails_container.add_widget(slot)
+            self.thumbnail_slots.append(slot)
+
+        self.overlay_layout.add_widget(self.thumbnails_container)
+
         self.add_widget(self.layout)
+
+    def _refresh_thumbnails(self):
+        for shot, slot in enumerate(self.thumbnail_slots):
+            thumbnail = slot.image
+            if shot < self._current_shot:
+                small_path = FileUtils.get_small_path(self.app.get_shot(shot))
+                if os.path.exists(small_path):
+                    thumbnail.source = small_path
+                    thumbnail.reload()
+                    thumbnail.opacity = 1
+                else:
+                    thumbnail.source = ''
+                    thumbnail.opacity = 0
+            else:
+                thumbnail.source = ''
+                thumbnail.opacity = 0
+
+    def _poll_pending_filter_tasks(self, dt):
+        if not self.app.has_pending_photo_tasks():
+            if self._clock_pending_tasks:
+                Clock.unschedule(self._clock_pending_tasks)
+                self._clock_pending_tasks = None
+            self._refresh_thumbnails()
 
     def on_entry(self, kwargs={}):
         Logger.info('CountdownScreen: on_entry().')
@@ -1230,7 +1345,8 @@ class CountdownScreen(ColorScreen):
         self._collage_started = False
         self._save_started = False
         self._current_shot = kwargs.get('shot') if 'shot' in kwargs else 0
-        self._current_format = kwargs.get('format') if 'format' in kwargs else 0
+        self._current_format = kwargs.get('format') if 'format' in kwargs else getattr(self.app, 'selected_format', 0)
+        self.app.selected_format = self._current_format
         aspect_ratio = self.app.get_format_aspect_ratio(self._current_format)
         self.camera.start(aspect_ratio)
         
@@ -1248,18 +1364,48 @@ class CountdownScreen(ColorScreen):
             self.overlay_layout.add_widget(self.btn_trigger)
         if self.circular_counter.parent:
             self.overlay_layout.remove_widget(self.circular_counter)
-        self._start_home_timeout()
+
+        if self._current_shot == 0:
+            self._stop_home_timeout()
+            self._purge_when_idle()
+        else:
+            self._start_home_timeout()
+
+        total_shots = self.app.get_shots_to_take(self._current_format)
+        if total_shots > 1:
+            self.thumbnails_container.opacity = 1
+            self._refresh_thumbnails()
+            if self._clock_pending_tasks:
+                Clock.unschedule(self._clock_pending_tasks)
+                self._clock_pending_tasks = None
+            if self.app.has_pending_photo_tasks():
+                self._clock_pending_tasks = Clock.schedule_interval(self._poll_pending_filter_tasks, 0.1)
+        else:
+            self.thumbnails_container.opacity = 0
         
         self._clock = None
         self._clock_progress = None
         self._clock_trigger = None
-        if kwargs.get('auto_start'):
-            self.trigger_event(None)
+        self._auto_start_time = 0.0
+        if self._clock_auto_start:
+            Clock.unschedule(self._clock_auto_start)
+            self._clock_auto_start = None
+        if kwargs.get('auto_start') and self._current_shot > 0:
+            self._clock_auto_start = Clock.schedule_once(lambda dt: self.trigger_event(None, source='auto_start'), 0.15)
 
     def on_exit(self, kwargs={}):
         Logger.info('CountdownScreen: on_exit().')
         self.loading.stop_animation()
         self.camera.opacity = 1
+        if self._clock_purge:
+            Clock.unschedule(self._clock_purge)
+            self._clock_purge = None
+        if self._clock_auto_start:
+            Clock.unschedule(self._clock_auto_start)
+            self._clock_auto_start = None
+        if self._clock_pending_tasks:
+            Clock.unschedule(self._clock_pending_tasks)
+            self._clock_pending_tasks = None
         if self._clock:
             Clock.unschedule(self._clock)
         if self._clock_progress:
@@ -1309,6 +1455,28 @@ class CountdownScreen(ColorScreen):
         Logger.info('CountdownScreen: home_timeout_event().')
         self._stop_home_timeout()
         self.app.transition_to(ScreenMgr.START)
+
+    def _purge_when_idle(self, dt=0):
+        if self.app.get_current_screen_name() != ScreenMgr.COUNTDOWN or self._current_shot != 0:
+            return
+        if self.app.has_pending_photo_tasks_timed_out():
+            self.app.enter_maintenance_mode(
+                message=self.app.t('processing.error_save_timeout'),
+                show_continue=False,
+            )
+            return
+        if self.app.has_pending_photo_tasks() or self.app.has_background_processes():
+            if self._clock_purge:
+                Clock.unschedule(self._clock_purge)
+            self._clock_purge = Clock.schedule_once(self._purge_when_idle, 0.5)
+        else:
+            if self._clock_purge:
+                Clock.unschedule(self._clock_purge)
+                self._clock_purge = None
+            self.app.clear_pending_photo_error()
+            self.app.purge_tmp()
+            if self.app.SHARE:
+                QRCodePopup.preload_async()
 
     def timer_event(self, obj):
         Logger.info('CountdownScreen: timer_event(%s)', obj)
@@ -1407,21 +1575,35 @@ class CountdownScreen(ColorScreen):
             else:
                 self.app.transition_to(ScreenMgr.REVIEW, format=self._current_format, saved=True)
 
-    def trigger_event(self, obj):
+    def trigger_event(self, obj, source=None):
         if obj is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
-        Logger.info('CountdownScreen: trigger_event().')
-        
+        if source is None:
+            source = 'touch' if obj is not None else 'keyboard'
+        Logger.info('CountdownScreen: trigger_event() [source=%s].', source)
+
+        if self._clock_auto_start:
+            Clock.unschedule(self._clock_auto_start)
+            self._clock_auto_start = None
+
+        if source == 'auto_start':
+            self._auto_start_time = Clock.get_boottime()
+
         if not self._timer_active:
             # Start the countdown
             self._timer_active = True
             self.start_countdown()
         else:
+            # Protect against accidental immediate cancellation right after auto_start
+            elapsed_since_auto_start = Clock.get_boottime() - self._auto_start_time
+            if source != 'auto_start' and elapsed_since_auto_start < 0.5:
+                Logger.info('CountdownScreen: trigger_event ignored (debounce %.2fs since auto_start).', elapsed_since_auto_start)
+                return
             # Cancel the countdown
             self._timer_active = False
             self.cancel_countdown()
 
     def on_keyboard_action(self):
-        self.trigger_event(None)
+        self.trigger_event(None, source='keyboard')
         return True
 
     def start_countdown(self):
@@ -1473,7 +1655,10 @@ class CountdownScreen(ColorScreen):
         # Show home button again
         if not self.btn_home.parent:
             self.overlay_layout.add_widget(self.btn_home)
-        self._start_home_timeout()
+        if self._current_shot != 0:
+            self._start_home_timeout()
+        else:
+            self._stop_home_timeout()
         
         # Update button icon and color (access child button from parent layout)
         for child in self.btn_trigger.children:
@@ -1522,7 +1707,7 @@ class ConfirmCaptureScreen(ColorScreen):
 
         self.app = app
         self._current_shot = 0
-        self._current_format = 1
+        self._current_format = 0
         self._selected_filter = 'color'  # Default filter
         self._original_image = None  # Store original image
         self._home_timeout_clock = None
@@ -1549,14 +1734,6 @@ class ConfirmCaptureScreen(ColorScreen):
             pos_hint={'x': 0.375, 'y':0.85},
         )
         self.icons = []
-        for _ in range(0, self.app.get_shots_to_take(self._current_format)):
-            icon = ResizeLabel(
-                font_name=ICON_TTF,
-                text=ICON_SHOT_TO_TAKE,
-                wh_fraction=0.07,
-            )
-            self.counter_layout.add_widget(icon)
-            self.icons.append(icon)
         self.overlay_layout.add_widget(self.counter_layout)
 
         # Filter cards container at bottom (always created in absolute position)
@@ -1937,8 +2114,19 @@ class ConfirmCaptureScreen(ColorScreen):
         else:
             if not self.counter_layout.parent:
                 self.overlay_layout.add_widget(self.counter_layout)
+            if len(self.icons) != total_shots:
+                self.counter_layout.clear_widgets()
+                self.icons = []
+                for _ in range(0, total_shots):
+                    icon = ResizeLabel(
+                        font_name=ICON_TTF,
+                        text=ICON_SHOT_TO_TAKE,
+                        wh_fraction=0.07,
+                    )
+                    self.counter_layout.add_widget(icon)
+                    self.icons.append(icon)
             for i in range(0, total_shots): self.icons[i].text = ICON_SHOT_TO_TAKE
-            for i in range(0, self._current_shot + 1): self.icons[i].text = ICON_SHOT_TAKEN
+            for i in range(0, min(self._current_shot + 1, total_shots)): self.icons[i].text = ICON_SHOT_TAKEN
 
         load_id = (self._current_shot, self._current_format)
 
@@ -2575,7 +2763,7 @@ class ReviewScreen(ColorScreen):
         Logger.info('ReviewScreen: home_event().')
         self._stop_home_timeout()
         self._save_collage()
-        self.app.transition_to(ScreenMgr.SUCCESS)
+        self.app.transition_to(ScreenMgr.SUCCESS, format=self._current_format)
 
     def retake_event(self, obj):
         if obj is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
@@ -2620,7 +2808,7 @@ class ReviewScreen(ColorScreen):
         Logger.info('ReviewScreen: timer_event().')
         self._stop_home_timeout()
         self._save_collage()
-        self.app.transition_to(ScreenMgr.START)
+        self.app.transition_to(ScreenMgr.COUNTDOWN, shot=0, format=self._current_format)
 
     def on_keyboard_action(self):
         self.home_event(None)
@@ -2639,6 +2827,7 @@ class SuccessScreen(ColorScreen):
         super(SuccessScreen, self).__init__(**kwargs)
 
         self.app = app
+        self._current_format = 0
 
         layout = BoxLayout(orientation='vertical')
 
@@ -2714,6 +2903,7 @@ class SuccessScreen(ColorScreen):
 
     def on_entry(self, kwargs={}):
         Logger.info('SuccessScreen: on_entry().')
+        self._current_format = kwargs.get('format') if 'format' in kwargs else getattr(self.app, 'selected_format', 0)
         self._feedback_recorded = False
         self.positive_feedback.disabled = False
         self.negative_feedback.disabled = False
@@ -2729,7 +2919,7 @@ class SuccessScreen(ColorScreen):
 
     def on_click_start(self, obj):
         Logger.info('SuccessScreen: on_click_start(%s).', obj)
-        self.app.transition_to(ScreenMgr.START)
+        self.app.transition_to(ScreenMgr.COUNTDOWN, shot=0, format=self._current_format)
 
     def on_feedback(self, positive):
         if self._feedback_recorded:
@@ -2739,11 +2929,15 @@ class SuccessScreen(ColorScreen):
         self.negative_feedback.disabled = True
         self.app.track_feedback(positive)
         Logger.info('SuccessScreen: feedback=%s.', 'positive' if positive else 'negative')
-        self.app.transition_to(ScreenMgr.START)
+        self.app.transition_to(ScreenMgr.COUNTDOWN, shot=0, format=self._current_format)
 
     def timer_event(self, obj):
         Logger.info('SuccessScreen: timer_event().')
-        self.app.transition_to(ScreenMgr.START)
+        self.app.transition_to(ScreenMgr.COUNTDOWN, shot=0, format=self._current_format)
+
+    def on_keyboard_action(self):
+        self.timer_event(None)
+        return True
 
 class CopyingScreen(ColorScreen):
     """

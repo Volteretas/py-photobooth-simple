@@ -7,7 +7,24 @@ GP_CAPTURE_IMAGE = 0
 GP_FILE_TYPE_NORMAL = 1
 
 gp = ctypes.CDLL('libgphoto2.so')
+
 PTR = ctypes.pointer
+
+# gPhoto2 C API types
+gp.gp_context_new.restype = ctypes.c_void_p
+
+gp.gp_list_new.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+gp.gp_list_new.restype = ctypes.c_int
+
+gp.gp_camera_autodetect.argtypes = [
+    ctypes.c_void_p,
+    ctypes.c_void_p
+]
+gp.gp_camera_autodetect.restype = ctypes.c_int
+
+gp.gp_list_count.argtypes = [ctypes.c_void_p]
+gp.gp_list_count.restype = ctypes.c_int
+
 context = gp.gp_context_new()
 
 class libgphoto2error(Exception):

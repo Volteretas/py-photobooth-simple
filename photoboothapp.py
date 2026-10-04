@@ -149,6 +149,7 @@ class PhotoboothApp(App):
         if len(self.print_formats) == 0:
             Logger.error('No templates found in templates/ directory!')
             raise Exception('No templates found. Please ensure template JSON files exist in the templates/ directory.')
+        self._selected_format = self._load_last_template()
 
         # Create required directories
         self.tmp_directory = os.path.join(self.DCIM_DIRECTORY, 'tmp')
@@ -156,6 +157,7 @@ class PhotoboothApp(App):
         if not os.path.exists(self.DCIM_DIRECTORY): os.makedirs(self.DCIM_DIRECTORY)
         if not os.path.exists(self.tmp_directory): os.makedirs(self.tmp_directory)
         if not os.path.exists(self.save_directory): os.makedirs(self.save_directory)
+        self._save_last_template()
         self.stats_store = StatsStore(
             os.path.join(self.save_directory, '.stats.json'),
             max_prints=self.MAX_PRINTS,
@@ -260,7 +262,13 @@ class PhotoboothApp(App):
 
     def is_usb_copy_allowed(self):
         current_screen = self.get_current_screen_name()
-        return current_screen == ScreenMgr.START
+        if current_screen == ScreenMgr.START:
+            return True
+        if current_screen == ScreenMgr.COUNTDOWN:
+            screen = self.sm.get_screen(ScreenMgr.COUNTDOWN)
+            if getattr(screen, '_current_shot', 0) == 0 and not getattr(screen, '_timer_active', False):
+                return True
+        return False
 
     def get_shot(self, shot_idx):
         return os.path.join(self.tmp_directory, "capture-{}.jpg".format(shot_idx))
@@ -274,20 +282,77 @@ class PhotoboothApp(App):
         path = os.path.join(self.last_saved_session_directory, 'collage.jpg')
         return path if os.path.exists(path) else None
 
-    def get_saved_collage(self):
-        if not self.last_saved_session_directory:
-            return None
-        path = os.path.join(self.last_saved_session_directory, 'collage.jpg')
-        return path if os.path.exists(path) else None
+    @property
+    def selected_format(self):
+        return getattr(self, '_selected_format', 0)
 
-    def get_shots_to_take(self, format=0):
+    @selected_format.setter
+    def selected_format(self, value):
+        if isinstance(value, int) and hasattr(self, 'print_formats') and 0 <= value < len(self.print_formats):
+            self._selected_format = value
+            self._save_last_template()
+        elif hasattr(self, 'print_formats') and len(self.print_formats) > 0:
+            self._selected_format = 0
+
+    def _get_last_template_path(self):
+        return os.path.join(self.DCIM_DIRECTORY, '.last_template')
+
+    def _load_last_template(self):
+        try:
+            path = self._get_last_template_path()
+            if os.path.exists(path):
+                with open(path, 'r', encoding='utf-8') as f:
+                    saved = f.read().strip()
+                if saved:
+                    # Match by template filename first (e.g. 'strip.json', 'Prueba_1.json')
+                    for idx, fmt in enumerate(self.print_formats):
+                        template_file = os.path.basename(getattr(fmt, '_template_path', ''))
+                        if template_file and template_file == saved:
+                            Logger.info(f'PhotoboothApp: restored last template by filename: {saved} (format index {idx})')
+                            return idx
+                    # Match by template name second
+                    for idx, fmt in enumerate(self.print_formats):
+                        template_name = getattr(fmt, '_name', '') or (fmt.get_name() if hasattr(fmt, 'get_name') else '')
+                        if template_name and template_name == saved:
+                            Logger.info(f'PhotoboothApp: restored last template by name: {saved} (format index {idx})')
+                            return idx
+                    # Match by integer index third
+                    if saved.isdigit():
+                        idx = int(saved)
+                        if 0 <= idx < len(self.print_formats):
+                            Logger.info(f'PhotoboothApp: restored last template by index: {idx}')
+                            return idx
+        except Exception as e:
+            Logger.warning(f'PhotoboothApp: failed to load last template: {e}')
+        return 0
+
+    def _save_last_template(self):
+        try:
+            if not os.path.exists(self.DCIM_DIRECTORY):
+                os.makedirs(self.DCIM_DIRECTORY)
+            path = self._get_last_template_path()
+            current_format = getattr(self, '_selected_format', 0)
+            if hasattr(self, 'print_formats') and 0 <= current_format < len(self.print_formats):
+                fmt = self.print_formats[current_format]
+                template_file = os.path.basename(getattr(fmt, '_template_path', ''))
+                to_save = template_file or str(current_format)
+                with open(path, 'w', encoding='utf-8') as f:
+                    f.write(to_save)
+        except Exception as e:
+            Logger.warning(f'PhotoboothApp: failed to save last template: {e}')
+
+    def get_shots_to_take(self, format=None):
+        if format is None:
+            format = self.selected_format
         return self.print_formats[format].get_photos_required()
 
     def get_layout_previews(self, format=0):
         return [f.get_preview() for f in self.print_formats]
 
-    def get_format_aspect_ratio(self, format_idx):
+    def get_format_aspect_ratio(self, format_idx=None):
         """Get the aspect ratio (width/height) for the given format."""
+        if format_idx is None:
+            format_idx = self.selected_format
         return self.print_formats[format_idx].get_aspect_ratio()
 
     def _log_disk_space(self, context):

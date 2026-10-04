@@ -713,7 +713,7 @@ class DeviceUtils:
     _capture = None
     _printer = None
 
-    def __init__(self, printer_name=None, picamera2_port=0, cv2_port=-1, zoom=None,
+    def __init__(self, printer_name=None, picamera2_port=0, cv2_port=2, zoom=None,
                  dslr_liveview_params=None, dslr_capture_params=None):
         self._zoom = zoom
 

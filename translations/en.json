@@ -1,6 +1,7 @@
 {
   "start.title": "PHOTO BOOTH",
   "start.tap_to_start": "TAP TO START",
+  "start.change_template": "CHANGE TEMPLATE",
   "start.version": "Version {version}",
   "select_format.photos_one": "{count} photo",
   "select_format.photos_many": "{count} photos",

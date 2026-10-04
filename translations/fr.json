@@ -1,6 +1,7 @@
 {
   "start.title": "PHOTOBOOTH",
   "start.tap_to_start": "TOUCHEZ POUR COMMENCER",
+  "start.change_template": "CHANGER DE MODÈLE",
   "start.version": "Version {version}",
   "select_format.photos_one": "{count} photo",
   "select_format.photos_many": "{count} photos",

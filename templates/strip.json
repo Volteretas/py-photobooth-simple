@@ -29,7 +29,7 @@
     }
   ],
   "print_params": {
-    "PageSize": "w288h432-div2",
+    "PageSize": "4x6in",
     "print-scaling": "fit"
   }
 }
