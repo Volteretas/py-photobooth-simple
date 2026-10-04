@@ -1,17 +1,50 @@
 import os
 import time
+import subprocess
+import shutil
 import ctypes
+import ctypes.util
 
 RETRIES = 1
 GP_CAPTURE_IMAGE = 0
 GP_FILE_TYPE_NORMAL = 1
 
-gp = ctypes.CDLL('libgphoto2.so')
+# Locate and load libgphoto2 dynamically across distributions
+_found_lib = ctypes.util.find_library('gphoto2')
+_candidates = [_found_lib, 'libgphoto2.so.6', 'libgphoto2.so', 'libgphoto2.so.2']
+gp = None
+for _cand in _candidates:
+    if _cand:
+        try:
+            gp = ctypes.CDLL(_cand)
+            break
+        except OSError:
+            pass
+
+if gp is None:
+    raise OSError('Cannot find or load libgphoto2 library.')
 
 PTR = ctypes.pointer
 
-# gPhoto2 C API types
+class libgphoto2error(Exception):
+    def __init__(self, result, message):
+        self.result = result
+        self.message = message
+    def __str__(self):
+        return f"{self.message} ({self.result})"
+
+class CameraFilePath(ctypes.Structure):
+    _fields_ = [('name', (ctypes.c_char * 128)), ('folder', (ctypes.c_char * 1024))]
+
+class CameraText(ctypes.Structure):
+    _fields_ = [('text', (ctypes.c_char * (32 * 1024)))]
+
+# gPhoto2 C API types and 64-bit safe ABI declarations
+gp.gp_context_new.argtypes = []
 gp.gp_context_new.restype = ctypes.c_void_p
+
+gp.gp_result_as_string.argtypes = [ctypes.c_int]
+gp.gp_result_as_string.restype = ctypes.c_char_p
 
 gp.gp_list_new.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
 gp.gp_list_new.restype = ctypes.c_int
@@ -25,33 +58,131 @@ gp.gp_camera_autodetect.restype = ctypes.c_int
 gp.gp_list_count.argtypes = [ctypes.c_void_p]
 gp.gp_list_count.restype = ctypes.c_int
 
+gp.gp_list_get_name.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_char_p)]
+gp.gp_list_get_name.restype = ctypes.c_int
+
+gp.gp_list_get_value.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_char_p)]
+gp.gp_list_get_value.restype = ctypes.c_int
+
+gp.gp_list_free.argtypes = [ctypes.c_void_p]
+gp.gp_list_free.restype = ctypes.c_int
+
+gp.gp_camera_new.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+gp.gp_camera_new.restype = ctypes.c_int
+
+gp.gp_camera_init.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+gp.gp_camera_init.restype = ctypes.c_int
+
+gp.gp_camera_exit.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+gp.gp_camera_exit.restype = ctypes.c_int
+
+gp.gp_camera_free.argtypes = [ctypes.c_void_p]
+gp.gp_camera_free.restype = ctypes.c_int
+
+gp.gp_camera_get_summary.argtypes = [ctypes.c_void_p, ctypes.POINTER(CameraText), ctypes.c_void_p]
+gp.gp_camera_get_summary.restype = ctypes.c_int
+
+gp.gp_camera_get_config.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p]
+gp.gp_camera_get_config.restype = ctypes.c_int
+
+gp.gp_camera_set_config.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+gp.gp_camera_set_config.restype = ctypes.c_int
+
+gp.gp_camera_capture.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(CameraFilePath), ctypes.c_void_p]
+gp.gp_camera_capture.restype = ctypes.c_int
+
+gp.gp_camera_capture_preview.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+gp.gp_camera_capture_preview.restype = ctypes.c_int
+
+gp.gp_camera_trigger_capture.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+gp.gp_camera_trigger_capture.restype = ctypes.c_int
+
+gp.gp_file_new.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+gp.gp_file_new.restype = ctypes.c_int
+
+gp.gp_camera_file_get.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p]
+gp.gp_camera_file_get.restype = ctypes.c_int
+
+gp.gp_file_open.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+gp.gp_file_open.restype = ctypes.c_int
+
+gp.gp_file_get_data_and_size.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_char_p), ctypes.POINTER(ctypes.c_ulong)]
+gp.gp_file_get_data_and_size.restype = ctypes.c_int
+
+gp.gp_file_save.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+gp.gp_file_save.restype = ctypes.c_int
+
+gp.gp_file_ref.argtypes = [ctypes.c_void_p]
+gp.gp_file_ref.restype = ctypes.c_int
+
+gp.gp_file_unref.argtypes = [ctypes.c_void_p]
+gp.gp_file_unref.restype = ctypes.c_int
+
+gp.gp_file_clean.argtypes = [ctypes.c_void_p]
+gp.gp_file_clean.restype = ctypes.c_int
+
+gp.gp_file_free.argtypes = [ctypes.c_void_p]
+gp.gp_file_free.restype = ctypes.c_int
+
+gp.gp_widget_ref.argtypes = [ctypes.c_void_p]
+gp.gp_widget_ref.restype = ctypes.c_int
+
+gp.gp_widget_unref.argtypes = [ctypes.c_void_p]
+gp.gp_widget_unref.restype = ctypes.c_int
+
+gp.gp_widget_get_label.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_char_p)]
+gp.gp_widget_get_label.restype = ctypes.c_int
+
+gp.gp_widget_get_info.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_char_p)]
+gp.gp_widget_get_info.restype = ctypes.c_int
+
+gp.gp_widget_get_type.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
+gp.gp_widget_get_type.restype = ctypes.c_int
+
+gp.gp_widget_get_value.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+gp.gp_widget_get_value.restype = ctypes.c_int
+
+gp.gp_widget_set_value.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+gp.gp_widget_set_value.restype = ctypes.c_int
+
+gp.gp_widget_get_name.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_char_p)]
+gp.gp_widget_get_name.restype = ctypes.c_int
+
+gp.gp_widget_get_child.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)]
+gp.gp_widget_get_child.restype = ctypes.c_int
+
+gp.gp_widget_count_children.argtypes = [ctypes.c_void_p]
+gp.gp_widget_count_children.restype = ctypes.c_int
+
 context = gp.gp_context_new()
 
-class libgphoto2error(Exception):
-    def __init__(self, result, message):
-        self.result = result
-        self.message = message
-    def __str__(self):
-        return self.message + ' (' + str(self.result) + ')'
-
-class CameraFilePath(ctypes.Structure):
-    _fields_ = [('name', (ctypes.c_char * 128)), ('folder', (ctypes.c_char * 1024))]
-
-class CameraText(ctypes.Structure):
-    _fields_ = [('text', (ctypes.c_char * (32 * 1024)))]
+def _release_camera_locks():
+    """Attempt to unmount/release gphoto2 device locked by GVFS / desktop volume monitor."""
+    try:
+        if shutil.which('gio'):
+            subprocess.run(['gio', 'mount', '-s', 'gphoto2'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+        elif shutil.which('gvfs-mount'):
+            subprocess.run(['gvfs-mount', '-s', 'gphoto2'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+    except Exception:
+        pass
 
 def check(result):
     if result < 0:
-        gp.gp_result_as_string.restype = ctypes.c_char_p
-        message = str(gp.gp_result_as_string(result), encoding='ascii')
+        msg_bytes = gp.gp_result_as_string(result)
+        message = msg_bytes.decode('utf-8', errors='replace') if isinstance(msg_bytes, bytes) else str(msg_bytes)
         raise libgphoto2error(result, message)
     return result
 
 def check_unref(result, camfile):
     if result != 0:
-        gp.gp_file_unref(camfile.pointer)
-        gp.gp_result_as_string.restype = ctypes.c_char_p
-        message = gp.gp_result_as_string(result)
+        ptr = getattr(camfile, '_ptr', None)
+        if ptr and getattr(ptr, 'value', None):
+            try:
+                gp.gp_file_unref(ptr)
+            except Exception:
+                pass
+        msg_bytes = gp.gp_result_as_string(result)
+        message = msg_bytes.decode('utf-8', errors='replace') if isinstance(msg_bytes, bytes) else str(msg_bytes)
         raise libgphoto2error(result, message)
 
 class cameraList():
@@ -60,6 +191,14 @@ class cameraList():
         check(gp.gp_list_new(PTR(self._ptr)))
         if not hasattr(gp, 'gp_camera_autodetect'): raise Exception('gphoto2 version is obsolete.')
         gp.gp_camera_autodetect(self._ptr, context)
+
+    def __del__(self):
+        if getattr(self, '_ptr', None) and self._ptr.value:
+            try:
+                gp.gp_list_free(self._ptr)
+                self._ptr = ctypes.c_void_p()
+            except Exception:
+                pass
 
     def get(self):
         return [(self._get_name(i), self._get_value(i)) for i in range(self.count())]
@@ -70,12 +209,12 @@ class cameraList():
     def _get_name(self, index):
         name = ctypes.c_char_p()
         check(gp.gp_list_get_name(self._ptr, int(index), PTR(name)))
-        return str(name.value, encoding='ascii')
+        return name.value.decode('utf-8', errors='replace') if name.value else ""
 
     def _get_value(self, index):
         value = ctypes.c_char_p()
         check(gp.gp_list_get_value(self._ptr, int(index), PTR(value)))
-        return str(value.value, encoding='ascii')
+        return value.value.decode('utf-8', errors='replace') if value.value else ""
 
 class camera():
     def __init__(self):
@@ -86,17 +225,31 @@ class camera():
         self._preview_file = None
 
     def __del__(self):
-        # Libérer le preview file si nécessaire
-        if self._preview_file:
+        try:
+            self.close()
+        except Exception:
+            pass
+        if getattr(self, '_ptr', None) and self._ptr.value:
             try:
-                self._preview_file.unref()
-            except:
+                gp.gp_camera_free(self._ptr)
+            except Exception:
                 pass
-        check(gp.gp_camera_exit(self._ptr))
-        check(gp.gp_camera_free(self._ptr))
+            self._ptr = ctypes.c_void_p()
 
     def close(self):
-        check(gp.gp_camera_exit(self._ptr, context))
+        if getattr(self, '_preview_file', None):
+            try:
+                self._preview_file.clean()
+                self._preview_file.unref()
+            except Exception:
+                pass
+            self._preview_file = None
+
+        if getattr(self, '_ptr', None) and self._ptr.value:
+            try:
+                gp.gp_camera_exit(self._ptr, context)
+            except Exception:
+                pass
 
     def summary(self):
         txt = CameraText()
@@ -165,7 +318,7 @@ class camera():
 
             # Error (Could not lock the device)
             elif ans == -60:
-                os.system('gvfs-mount -s gphoto2')
+                _release_camera_locks()
                 time.sleep(1)
         check(ans)
 
@@ -173,10 +326,15 @@ class cameraFile():
     def __init__(self, cam = None, srcfolder = None, srcfilename = None):
         self._ptr = ctypes.c_void_p()
         check(gp.gp_file_new(PTR(self._ptr)))
-        if cam: check_unref(gp.gp_camera_file_get(cam, srcfolder, srcfilename, GP_FILE_TYPE_NORMAL, self._ptr, context), self)
+        if cam:
+            folder_bytes = srcfolder.encode('utf-8') if isinstance(srcfolder, str) else srcfolder
+            file_bytes = srcfilename.encode('utf-8') if isinstance(srcfilename, str) else srcfilename
+            check_unref(gp.gp_camera_file_get(cam, folder_bytes, file_bytes, GP_FILE_TYPE_NORMAL, self._ptr, context), self)
 
     def open(self, filename):
-        check(gp.gp_file_open(PTR(self._ptr), filename))
+        if isinstance(filename, str):
+            filename = filename.encode('utf-8')
+        check(gp.gp_file_open(self._ptr, filename))
 
     def get_data(self, auto_clean=True):
         data = ctypes.c_char_p()
@@ -184,35 +342,59 @@ class cameraFile():
         check(gp.gp_file_get_data_and_size(self._ptr, PTR(data), PTR(size)))
         data = ctypes.string_at(data, int(size.value))
         if auto_clean:
-            self.unref()
             self.clean()
+            self.unref()
         return data
 
     def save(self, filename=None):
-        if filename is None: filename = self.name
+        if filename is None: filename = getattr(self, 'name', None)
+        if isinstance(filename, str):
+            filename = filename.encode('utf-8')
         check(gp.gp_file_save(self._ptr, filename))
 
     def ref(self):
-        check(gp.gp_file_ref(self._ptr))
+        if getattr(self, '_ptr', None) and self._ptr.value:
+            check(gp.gp_file_ref(self._ptr))
 
     def unref(self):
-        check(gp.gp_file_unref(self._ptr))
+        if getattr(self, '_ptr', None) and self._ptr.value:
+            ptr = self._ptr
+            self._ptr = ctypes.c_void_p()
+            check(gp.gp_file_unref(ptr))
 
     def clean(self):
-        check(gp.gp_file_clean(self._ptr))
+        if getattr(self, '_ptr', None) and self._ptr.value:
+            check(gp.gp_file_clean(self._ptr))
+
+    def __del__(self):
+        try:
+            if getattr(self, '_ptr', None) and self._ptr.value:
+                gp.gp_file_unref(self._ptr)
+                self._ptr = ctypes.c_void_p()
+        except Exception:
+            pass
 
 class cameraConfig():
     def __init__(self):
         self._ptr = ctypes.c_void_p()
 
     def ref(self):
-        check(gp.gp_widget_ref(self._ptr))
+        if getattr(self, '_ptr', None) and self._ptr.value:
+            check(gp.gp_widget_ref(self._ptr))
 
     def unref(self):
-        check(gp.gp_widget_unref(self._ptr))
+        if getattr(self, '_ptr', None) and self._ptr.value:
+            ptr = self._ptr
+            self._ptr = ctypes.c_void_p()
+            check(gp.gp_widget_unref(ptr))
 
     def __del__(self):
-        self.unref()
+        try:
+            if getattr(self, '_ptr', None) and self._ptr.value:
+                gp.gp_widget_unref(self._ptr)
+                self._ptr = ctypes.c_void_p()
+        except Exception:
+            pass
 
     def get_path(self, path):
         names = path.strip('/').split('/')
@@ -235,12 +417,12 @@ class cameraConfig():
     def get_label(self):
         label = ctypes.c_char_p()
         check(gp.gp_widget_get_label(self._ptr, PTR(label)))
-        return str(label.value, encoding='ascii')
+        return label.value.decode('utf-8', errors='replace') if label.value else ""
 
     def get_info(self):
         info = ctypes.c_char_p()
         check(gp.gp_widget_get_info(self._ptr, PTR(info)))
-        return str(info.value, encoding='ascii')
+        return info.value.decode('utf-8', errors='replace') if info.value else ""
 
     def get_type(self):
         type = ctypes.c_int()
@@ -248,41 +430,49 @@ class cameraConfig():
         return type.value
 
     def get_value(self):
-        type = self.get_type()
-        value = ctypes.c_void_p()
-        ans = gp.gp_widget_get_value(self._ptr, PTR(value))
-        check(ans)
-        if type in [2, 5, 6]:
-            value = ctypes.cast(value.value, ctypes.c_char_p)
-            return str(value.value, encoding='ascii')
-        elif type == 3:
-            value = ctypes.cast(value.value, ctypes.c_float_p)
-            return value.value
-        elif type in [4, 8]:
-            value = ctypes.cast(value.value, ctypes.c_int_p)
-            return value.value
+        wtype = self.get_type()
+        if wtype in [2, 5, 6]:
+            val = ctypes.c_char_p()
+            ans = gp.gp_widget_get_value(self._ptr, PTR(val))
+            check(ans)
+            return val.value.decode('utf-8', errors='replace') if val.value else ""
+        elif wtype == 3:
+            val = ctypes.c_float()
+            ans = gp.gp_widget_get_value(self._ptr, PTR(val))
+            check(ans)
+            return val.value
+        elif wtype in [4, 8]:
+            val = ctypes.c_int()
+            ans = gp.gp_widget_get_value(self._ptr, PTR(val))
+            check(ans)
+            return val.value
         else:
             return None
 
     def set_value(self, value):
-        type = self.get_type()
-        if type in [2, 5, 6]:
-            if isinstance(value, str): value = str.encode(value)
-            if not isinstance(value, bytes): raise libgphoto2error(type(value).__name__, 'Value should either be a string or bytes')
-            value = ctypes.c_char_p(value)
-        elif type == 3:
-            if isinstance(value, str): value = float(value)
-            value = ctypes.c_float_p(value)
-        elif type in [4, 8]:
-            if isinstance(value, str): value = int(value)
-            value = PTR(ctypes.c_int(value)) # c_int_p ? TODO
-        else: return
-        check(gp.gp_widget_set_value(self._ptr, value))
+        wtype = self.get_type()
+        if wtype in [2, 5, 6]:
+            if isinstance(value, str):
+                val_bytes = value.encode('utf-8')
+            elif isinstance(value, bytes):
+                val_bytes = value
+            else:
+                raise libgphoto2error(-1, 'Value should either be a string or bytes')
+            val_ptr = ctypes.c_char_p(val_bytes)
+        elif wtype == 3:
+            val_float = ctypes.c_float(float(value))
+            val_ptr = PTR(val_float)
+        elif wtype in [4, 8]:
+            val_int = ctypes.c_int(int(value))
+            val_ptr = PTR(val_int)
+        else:
+            return
+        check(gp.gp_widget_set_value(self._ptr, val_ptr))
 
     def get_name(self):
         name = ctypes.c_char_p()
         check(gp.gp_widget_get_name(self._ptr, PTR(name)))
-        return str(name.value, encoding='ascii')
+        return name.value.decode('utf-8', errors='replace') if name.value else ""
 
     def _get_child_by_name(self, name):
         for i in range(self._count_children()):

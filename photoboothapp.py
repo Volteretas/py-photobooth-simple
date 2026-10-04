@@ -636,12 +636,14 @@ class PhotoboothApp(App):
             try:
                 # A disconnected gPhoto/Picamera handle must be released before rediscovery.
                 old_devices.close()
+                camera_cfg = getattr(self, 'config', None)
+                cv2_port = camera_cfg.get_camera() if camera_cfg and hasattr(camera_cfg, 'get_camera') else getattr(self, 'CAMERA', 'auto')
                 replacement = DeviceUtils(
-                    printer_name=self.PRINTER,
-                    cv2_port=self.config.get_camera(),
-                    zoom=self.CALIBRATION,
-                    dslr_liveview_params=self._dslr_liveview_params,
-                    dslr_capture_params=self._dslr_capture_params,
+                    printer_name=getattr(self, 'PRINTER', None),
+                    cv2_port=cv2_port,
+                    zoom=getattr(self, 'CALIBRATION', None),
+                    dslr_liveview_params=getattr(self, '_dslr_liveview_params', {}),
+                    dslr_capture_params=getattr(self, '_dslr_capture_params', {}),
                 )
                 self.devices = replacement
                 Logger.info('PhotoboothApp: camera reconnected')
@@ -741,12 +743,14 @@ class PhotoboothApp(App):
         except Exception as exc:
             Logger.warning('PhotoboothApp: device close during reset failed: %s', exc)
 
+        camera_cfg = getattr(self, 'config', None)
+        cv2_port = camera_cfg.get_camera() if camera_cfg and hasattr(camera_cfg, 'get_camera') else getattr(self, 'CAMERA', 'auto')
         self.devices = DeviceUtils(
-            printer_name=self.PRINTER,
-            cv2_port=self.config.get_camera(),
-            zoom=self.CALIBRATION,
-            dslr_liveview_params=self._dslr_liveview_params,
-            dslr_capture_params=self._dslr_capture_params,
+            printer_name=getattr(self, 'PRINTER', None),
+            cv2_port=cv2_port,
+            zoom=getattr(self, 'CALIBRATION', None),
+            dslr_liveview_params=getattr(self, '_dslr_liveview_params', {}),
+            dslr_capture_params=getattr(self, '_dslr_capture_params', {}),
         )
         self._log_runtime_snapshot('devices_reset')
 
@@ -905,7 +909,9 @@ class PhotoboothApp(App):
 
         task_id = self.devices.print(file_path, options)
         if task_id:
-            self.stats_store.track_photo_printed()
+            self.stats_store.track_print()
+            if hasattr(self.stats_store, 'track_photo_printed'):
+                self.stats_store.track_photo_printed()
         return task_id
 
     def purge_tmp(self):
