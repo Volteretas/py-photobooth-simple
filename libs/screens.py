@@ -2,6 +2,8 @@ import threading
 import time
 import io
 import os
+import webbrowser
+import subprocess
 from xml.sax.saxutils import escape as xml_escape
 import cv2
 import numpy as np
@@ -19,6 +21,7 @@ from kivy.core.window import Window
 from kivy.graphics.texture import Texture
 from kivy.metrics import dp, sp
 from kivy.core.image import Image as CoreImage
+from kivy.animation import Animation
 
 from libs.kivywidgets import *
 from libs.file_utils import FileUtils
@@ -60,6 +63,8 @@ HOME_TIMEOUT_SECONDS = 60
 SELECT_FORMAT_HOME_TIMEOUT_SECONDS = 30
 COUNTDOWN_HOME_TIMEOUT_SECONDS = 30
 CONFIRM_CAPTURE_HOME_TIMEOUT_SECONDS = 30
+REVIEW_SLIDE_DURATION_SECONDS = 2.0
+REVIEW_CROSSFADE_DURATION_SECONDS = 0.45
 
 def hex_to_rgba(hex_color):
     hex_color = hex_color.lstrip('#')
@@ -114,6 +119,8 @@ ICON_CONFIRM = '\u4908'
 ICON_CANCEL = '\u3d42'
 ICON_RETAKE = '\u3b82'
 ICON_HOME = '\u4161'
+ICON_TEMPLATE = '\u425e'
+ICON_ADMIN = '\u46c1'
 ICON_PRINT = '\u458e'
 ICON_SUCCESS = '\u4903'
 ICON_SUCCESS2 = '\u4304'
@@ -356,18 +363,38 @@ class StartScreen(BackgroundScreen):
         )
         self.add_widget(self.diagnostic_button)
 
-        self.btn_change_template = RoundedButton(
-            text=app.t('start.change_template', default='CHANGE TEMPLATE'),
-            font_size=SMALL_FONT(),
-            size_hint=(0.28, 0.075),
-            pos_hint={'x': 0.02, 'top': 0.98},
-            background_color=[0.18, 0.24, 0.32, 0.85],
-            color=label_color,
-            bold=True,
+        self.btn_change_template = make_icon_button(
+            ICON_TEMPLATE,
+            size=0.075,
+            font=ICON_TTF,
+            pos_hint={'x': 0.015, 'top': 0.985},
+            font_size_fraction=0.035,
+            bgcolor=HOME_COLOR,
+            on_release=self.on_change_template,
         )
-        wh_bind(self.btn_change_template, 'font_size', SMALL_FONT)
-        self.btn_change_template.bind(on_release=self.on_change_template)
         self.add_widget(self.btn_change_template)
+
+        self.btn_admin = make_icon_button(
+            ICON_ADMIN,
+            size=0.075,
+            font=ICON_TTF,
+            pos_hint={'top': 0.985},
+            font_size_fraction=0.035,
+            bgcolor=HOME_COLOR,
+            on_release=self.on_admin,
+        )
+        self.add_widget(self.btn_admin)
+
+        self.btn_change_template.bind(pos=self._update_admin_button_pos, size=self._update_admin_button_pos)
+        Window.bind(size=self._update_admin_button_pos)
+        self._update_admin_button_pos()
+
+    def _update_admin_button_pos(self, *args):
+        margin = min(Window.size) * 0.015
+        if self.btn_change_template.opacity > 0:
+            self.btn_admin.x = self.btn_change_template.right + margin
+        else:
+            self.btn_admin.x = self.btn_change_template.x
 
     def on_entry(self, kwargs={}):
         Logger.info('StartScreen: on_entry().')
@@ -377,6 +404,7 @@ class StartScreen(BackgroundScreen):
         else:
             self.btn_change_template.opacity = 0
             self.btn_change_template.disabled = True
+        self._update_admin_button_pos()
         # Temporary ponytail: disable StartScreen breeze effect and keep the label static.
         # self.start_label.start_breeze()
         if self.app.STARTSCREEN_SHOW_INSTRUCTIONS:
@@ -414,13 +442,42 @@ class StartScreen(BackgroundScreen):
         if self.app.get_current_screen_name() != ScreenMgr.START: return
         if self.diagnostic_button.collide_point(*obj.last_touch.pos): return
         if self.btn_change_template.opacity > 0 and self.btn_change_template.collide_point(*obj.last_touch.pos): return
+        if hasattr(self, 'btn_admin') and self.btn_admin.opacity > 0 and self.btn_admin.collide_point(*obj.last_touch.pos): return
         Logger.info('StartScreen: on_click().')
         self.app.transition_to(ScreenMgr.COUNTDOWN, shot=0, format=self.app.selected_format)
 
     def on_change_template(self, obj):
         if obj is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
         Logger.info('StartScreen: on_change_template().')
-        self.app.transition_to(ScreenMgr.SELECT_FORMAT)
+        self.app.transition_to(ScreenMgr.SELECT_FORMAT, source_screen=ScreenMgr.START)
+
+    def on_admin(self, obj):
+        if obj is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
+        Logger.info('StartScreen: on_admin().')
+        url = None
+        if hasattr(self.app, 'web_server') and self.app.web_server:
+            try:
+                url = self.app.web_server.get_admin_url()
+            except Exception as exc:
+                Logger.warning('StartScreen: Failed to get admin URL from web_server: %s', exc)
+        if not url:
+            from libs.web_server import WebServer
+            port = getattr(self.app, 'WEB_PORT', 5000)
+            ip = WebServer.get_local_ip()
+            url = f'http://{ip}:{port}/admin'
+
+        def _open():
+            try:
+                Logger.info('StartScreen: Opening admin URL: %s', url)
+                if not webbrowser.open(url):
+                    subprocess.Popen(['xdg-open', url])
+            except Exception:
+                try:
+                    subprocess.Popen(['xdg-open', url])
+                except Exception as exc:
+                    Logger.error('StartScreen: Could not open browser for %s: %s', url, exc)
+
+        threading.Thread(target=_open, name='open-admin-browser', daemon=True).start()
 
     def on_diagnostic(self, obj):
         Logger.info('StartScreen: opening diagnostics.')
@@ -769,6 +826,7 @@ class SelectFormatScreen(ColorScreen):
         super(SelectFormatScreen, self).__init__(**kwargs)
         self.app = app
         self._home_timeout_clock = None
+        self._source_screen = ScreenMgr.START
 
         # Format cards container (scrollable if needed)
         from kivy.uix.gridlayout import GridLayout
@@ -814,6 +872,7 @@ class SelectFormatScreen(ColorScreen):
             font=ICON_TTF,
             pos_hint={'x': 0.015, 'top': 0.985},
             font_size_fraction=0.035,
+            bgcolor=CANCEL_COLOR,
             on_release=self.on_back,
         )
         self.add_widget(self.btn_back)
@@ -984,6 +1043,7 @@ class SelectFormatScreen(ColorScreen):
         # OPTIMIZED: Previews are now cached in templates, no need to reload
         # Previously: reloaded all previews on every entry (slow)
         # Now: previews are generated once and cached in TemplateCollage
+        self._source_screen = kwargs.get('source_screen', kwargs.get('return_to', ScreenMgr.START))
         self._start_home_timeout()
         if self.app.ringled:
             self.app.ringled.start_rainbow()
@@ -1024,14 +1084,16 @@ class SelectFormatScreen(ColorScreen):
 
     def on_back(self, obj):
         if obj is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
-        Logger.info('SelectFormatScreen: on_back().')
+        Logger.info('SelectFormatScreen: on_back() [source_screen=%s].', self._source_screen)
         self._stop_home_timeout()
-        self.app.transition_to(ScreenMgr.COUNTDOWN, shot=0, format=self.app.selected_format)
+        if self._source_screen == ScreenMgr.COUNTDOWN:
+            self.app.transition_to(ScreenMgr.COUNTDOWN, shot=0, format=self.app.selected_format)
+        else:
+            self.app.transition_to(ScreenMgr.START)
 
     def on_keyboard_action(self):
         Logger.info('SelectFormatScreen: on_keyboard_action().')
-        self._stop_home_timeout()
-        self.app.transition_to(ScreenMgr.COUNTDOWN, shot=0, format=self.app.selected_format)
+        self.on_back(None)
         return True
 
 class ErrorScreen(ColorScreen):
@@ -2331,7 +2393,7 @@ class ProcessingScreen(ColorScreen):
             self.app.transition_to(ScreenMgr.REVIEW, format=self._current_format)
 
 class PrintStatusPopup(FloatLayout):
-    """Non-blocking print overlay; the underlying confirm screen keeps all actions available after closing."""
+    """Non-intrusive print status banner; the underlying review screen keeps all actions and slideshow visible."""
 
     def __init__(self, app, format_idx, on_dismiss=None, **kwargs):
         super(PrintStatusPopup, self).__init__(**kwargs)
@@ -2339,6 +2401,7 @@ class PrintStatusPopup(FloatLayout):
         self.format_idx = format_idx
         self.on_dismiss = on_dismiss
         self._clock = None
+        self._auto_close_clock = None
         self._close_scheduled = False
         self._finished = False
         self._started_at = time.monotonic()
@@ -2349,73 +2412,76 @@ class PrintStatusPopup(FloatLayout):
         self._printer_wait_started_at = None
         self._timeout = getattr(self.app, 'PRINTER_WAIT_TIMEOUT', 45)
 
-        with self.canvas.before:
-            Color(0, 0, 0, 0.8)
-            self.bg_rect = Rectangle(pos=self.pos, size=self.size)
-        self.bind(pos=self._update_bg, size=self._update_bg)
-
         from kivy.graphics import RoundedRectangle
 
+        # Sleek, compact top-center banner that doesn't block the screen
         self.card = BoxLayout(
-            orientation='vertical',
-            size_hint=(0.68, 0.55),
-            pos_hint={'center_x': 0.5, 'center_y': 0.5},
-            padding=Window.height * 0.03,
-            spacing=Window.height * 0.018,
+            orientation='horizontal',
+            size_hint=(0.54, 0.10),
+            pos_hint={'center_x': 0.5, 'top': 0.96},
+            padding=[dp(14), dp(6), dp(14), dp(6)],
+            spacing=dp(10),
         )
         with self.card.canvas.before:
-            Color(1, 1, 1, 1)
-            self.card_rect = RoundedRectangle(pos=self.card.pos, size=self.card.size, radius=[Window.height * 0.022])
+            self.card_color = Color(0.12, 0.15, 0.18, 0.95)
+            self.card_rect = RoundedRectangle(pos=self.card.pos, size=self.card.size, radius=[dp(12)])
         self.card.bind(pos=self._update_card, size=self._update_card)
 
         self.icon = ResizeLabel(
             text=ICON_PRINT,
             font_name=ICON_TTF,
-            size_hint=(1, 0.28),
-            wh_fraction=0.14,
-            color=(0, 0, 0, 1),
+            size_hint=(0.14, 1),
+            wh_fraction=0.045,
+            color=(1, 1, 1, 1),
             halign='center',
             valign='middle',
         )
         self.card.add_widget(self.icon)
 
-        self.title = ResizeLabel(
+        self.text_layout = BoxLayout(orientation='vertical', size_hint=(0.86, 1), spacing=dp(2))
+        self.title = Label(
             text=app.t('print.title_printing'),
-            size_hint=(1, 0.15),
-            wh_fraction=0.05,
-            bold=True,
-            color=(0, 0, 0, 1),
-            halign='center',
+            size_hint=(1, 0.5),
+            font_name=MONTSERRAT_SEMIBOLD_TTF,
+            font_size=SMALL_FONT(),
+            color=(1, 1, 1, 1),
+            halign='left',
             valign='middle',
+            shorten=True,
+            shorten_from='right',
         )
-        self.card.add_widget(self.title)
+        wh_bind(self.title, 'font_size', SMALL_FONT)
+        self.title.bind(size=self.title.setter('text_size'))
+        self.text_layout.add_widget(self.title)
 
         self.message = Label(
             text=app.t('print.status_save_before'),
-            size_hint=(1, 0.28),
+            size_hint=(1, 0.5),
             font_size=SMALL_FONT(),
-            color=(0, 0, 0, 1),
-            halign='center',
+            color=(0.88, 0.88, 0.88, 1),
+            halign='left',
             valign='middle',
+            shorten=True,
+            shorten_from='right',
         )
-        wh_bind(self.message, 'font_size', SMALL_FONT)
+        wh_bind(self.message, 'font_size', lambda: max(dp(11), Window.height * 0.022))
         self.message.bind(size=self.message.setter('text_size'))
-        self.card.add_widget(self.message)
+        self.text_layout.add_widget(self.message)
+        self.card.add_widget(self.text_layout)
 
         self.btn_close = make_icon_text_button(
             icon=ICON_CONFIRM,
             text=app.t('common.ok'),
-            size_hint=(0.24, 0.13),
-            pos_hint={'center_x': 0.5},
+            size_hint=(0.20, 0.75),
+            pos_hint={'center_y': 0.5},
             icon_font=ICON_TTF,
-            icon_font_size_fraction=0.055,
-            text_font_size_fraction=0.035,
+            icon_font_size_fraction=0.035,
+            text_font_size_fraction=0.025,
             bgcolor=CONFIRM_COLOR,
             on_release=self._close,
         )
         self.btn_close.opacity = 0
         self.btn_close.disabled = True
-        self.card.add_widget(self.btn_close)
 
         self.add_widget(self.card)
         self._clock = Clock.schedule_once(self._tick, 0.2)
@@ -2423,11 +2489,17 @@ class PrintStatusPopup(FloatLayout):
     def on_touch_down(self, touch):
         if self.card.collide_point(*touch.pos):
             return super(PrintStatusPopup, self).on_touch_down(touch)
-        return True
+        return False
 
-    def _update_bg(self, *args):
-        self.bg_rect.pos = self.pos
-        self.bg_rect.size = self.size
+    def on_touch_move(self, touch):
+        if self.card.collide_point(*touch.pos):
+            return super(PrintStatusPopup, self).on_touch_move(touch)
+        return False
+
+    def on_touch_up(self, touch):
+        if self.card.collide_point(*touch.pos):
+            return super(PrintStatusPopup, self).on_touch_up(touch)
+        return False
 
     def _update_card(self, instance, *args):
         self.card_rect.pos = instance.pos
@@ -2437,15 +2509,34 @@ class PrintStatusPopup(FloatLayout):
         self._finished = True
         self.title.text = title
         self.message.text = message
-        self.icon.text = ICON_ERROR_PRINTING if error else ICON_SUCCESS
-        self.btn_close.opacity = 1
-        self.btn_close.disabled = False
+        if error:
+            self.card_color.rgba = (0.55, 0.15, 0.15, 0.95)
+            self.icon.text = ICON_ERROR_PRINTING
+            if self.btn_close.parent is None:
+                self.text_layout.size_hint = (0.66, 1)
+                self.card.add_widget(self.btn_close)
+            self.btn_close.opacity = 1
+            self.btn_close.disabled = False
+            # Auto-dismiss error banner after 6 seconds so user doesn't have to touch OK
+            if self._auto_close_clock:
+                Clock.unschedule(self._auto_close_clock)
+            self._auto_close_clock = Clock.schedule_once(lambda dt: self._close(None), 6.0)
+        else:
+            self.card_color.rgba = (0.15, 0.45, 0.25, 0.95)
+            self.icon.text = ICON_SUCCESS
+            if self.btn_close.parent is not None:
+                self.card.remove_widget(self.btn_close)
+                self.text_layout.size_hint = (0.86, 1)
+            # Auto-dismiss success banner after 2 seconds
+            if self._auto_close_clock:
+                Clock.unschedule(self._auto_close_clock)
+            self._auto_close_clock = Clock.schedule_once(lambda dt: self._close(None), 2.0)
         self._clock = None
 
     def _set_print_error(self, detail=None):
         message = self.app.t('print.error_failed_body')
         if detail:
-            message = f'{message}\n{detail}'
+            message = f'{message}: {detail}'
         Logger.error('PrintStatusPopup: print failed: %s', detail or '-')
         self._set_done(self.app.t('print.error_failed_title'), message, error=True)
 
@@ -2458,7 +2549,7 @@ class PrintStatusPopup(FloatLayout):
         return self.app.t(key, default=str(reason).replace('-', ' '))
 
     def _tick(self, obj):
-        if self._finished:
+        if self._close_scheduled or self._finished:
             return
         if self.app.has_pending_photo_tasks():
             if self.app.has_pending_photo_tasks_timed_out():
@@ -2552,7 +2643,6 @@ class PrintStatusPopup(FloatLayout):
                 self.app.track_print_sent()
                 self._print_counted = True
             self._set_done(self.app.t('print.title_sent'), self.app.t('print.status_sent'))
-            Clock.schedule_once(lambda dt: self._close(None), 2)
         else:
             self.message.text = self.app.t('print.status_printing')
             self._clock = Clock.schedule_once(self._tick, 1)
@@ -2562,6 +2652,9 @@ class PrintStatusPopup(FloatLayout):
         if self._close_scheduled:
             return
         self._close_scheduled = True
+        if self._auto_close_clock:
+            Clock.unschedule(self._auto_close_clock)
+            self._auto_close_clock = None
         if self._clock:
             Clock.unschedule(self._clock)
             self._clock = None
@@ -2580,17 +2673,40 @@ class ReviewScreen(ColorScreen):
         self._save_started = False
         self._home_timeout_clock = None
         self._home_progress_clock = None
+        self._slideshow_clock = None
+        self._slides = []
+        self._current_slide_idx = 0
+        self._slide_token = 0
+        self._slide_duration = getattr(self.app, 'REVIEW_SLIDE_DURATION', REVIEW_SLIDE_DURATION_SECONDS)
+        self._crossfade_duration = getattr(self.app, 'REVIEW_CROSSFADE_DURATION', REVIEW_CROSSFADE_DURATION_SECONDS)
         self.layout = AnchorLayout(padding=BORDER_THINKNESS, anchor_x='center', anchor_y='top')
         self.overlay_layout = FloatLayout()
         self.layout.add_widget(self.overlay_layout)
 
-        self.preview = BlurredImage(
+        # Image preview container supporting dual-layer smooth crossfade
+        self.image_container = FloatLayout(size_hint=(1, 1), pos_hint={'x': 0, 'y': 0})
+        self.overlay_layout.add_widget(self.image_container)
+
+        self.preview_a = BlurredImage(
             blur=self.app.BLUR_COLLAGE,
             fit_mode='contain',
             size_hint=(1, 1),
             pos_hint={'x': 0, 'y': 0},
         )
-        self.overlay_layout.add_widget(self.preview)
+        self.preview_b = BlurredImage(
+            blur=self.app.BLUR_COLLAGE,
+            fit_mode='contain',
+            size_hint=(1, 1),
+            pos_hint={'x': 0, 'y': 0},
+        )
+        self.preview_b.opacity = 0.0
+
+        self.image_container.add_widget(self.preview_a)
+        self.image_container.add_widget(self.preview_b)
+
+        self._current_preview = self.preview_a
+        self._next_preview = self.preview_b
+        self.preview = self.preview_a
 
         self.btn_home = make_icon_button(
             ICON_HOME,
@@ -2691,7 +2807,10 @@ class ReviewScreen(ColorScreen):
         Logger.info('ReviewScreen: on_entry().')
         self._current_format = kwargs.get('format') if 'format' in kwargs else 0
         self._save_started = kwargs.get('saved', False)
-        single_photo = self.app.get_shots_to_take(self._current_format) == 1
+        self._slide_duration = getattr(self.app, 'REVIEW_SLIDE_DURATION', REVIEW_SLIDE_DURATION_SECONDS)
+        self._crossfade_duration = getattr(self.app, 'REVIEW_CROSSFADE_DURATION', REVIEW_CROSSFADE_DURATION_SECONDS)
+        total_shots = self.app.get_shots_to_take(self._current_format)
+        single_photo = total_shots == 1
         if single_photo:
             if self.btn_retake.parent is None:
                 self.overlay_layout.add_widget(self.btn_retake)
@@ -2701,26 +2820,109 @@ class ReviewScreen(ColorScreen):
         if self.app.ringled:
             self.app.ringled.start_rainbow()
         self._sync_print_button()
-        self._load_preview_async(FileUtils.get_small_path(self.app.get_collage()))
+
+        # Build slideshow: individual photos in sequence, followed by final collage
+        self._slides = []
+        if total_shots > 0:
+            for i in range(total_shots):
+                self._slides.append((self.app.get_shot(i), False))
+        self._slides.append((self.app.get_collage(), True))
+
+        self._current_slide_idx = 0
+        self._stop_slideshow()
+        self._current_preview = self.preview_a
+        self._next_preview = self.preview_b
+        self.preview_a.opacity = 1.0
+        self.preview_b.opacity = 0.0
+        self.preview = self.preview_a
+        self._show_current_slide(animate=False)
+        if len(self._slides) > 1:
+            self._slideshow_clock = Clock.schedule_once(self._advance_slideshow, self._slide_duration)
+
         if not single_photo:
             self._save_collage()
         if self.app.SHARE:
             QRCodePopup.preload_async()
+
+    def _show_current_slide(self, animate=False):
+        if not self._slides or self._current_slide_idx >= len(self._slides):
+            return
+        path, is_collage = self._slides[self._current_slide_idx]
+        target_preview = self._next_preview if animate else self._current_preview
+        target_preview._blur = self.app.BLUR_COLLAGE if is_collage else self.app.BLUR_IMAGES
+        self._load_preview_async(path, target_preview=target_preview, animate=animate)
+
+    def _advance_slideshow(self, dt):
+        if self._current_slide_idx + 1 < len(self._slides):
+            self._current_slide_idx += 1
+            self._show_current_slide(animate=True)
+            if self._current_slide_idx < len(self._slides) - 1:
+                self._slideshow_clock = Clock.schedule_once(self._advance_slideshow, self._slide_duration)
+            else:
+                self._slideshow_clock = None
+                self._reset_timeout()
+        else:
+            self._slideshow_clock = None
+
+    def _start_crossfade(self):
+        # Bring incoming layer to the top of image_container
+        if self._next_preview.parent == self.image_container:
+            self.image_container.remove_widget(self._next_preview)
+            self.image_container.add_widget(self._next_preview)
+
+        Animation.stop_all(self._current_preview)
+        Animation.stop_all(self._next_preview)
+
+        self._next_preview.opacity = 0.0
+
+        anim_in = Animation(opacity=1.0, d=self._crossfade_duration, t='linear')
+        anim_out = Animation(opacity=0.0, d=self._crossfade_duration, t='linear')
+
+        def on_complete(*args):
+            self._current_preview.opacity = 0.0
+            self._next_preview.opacity = 1.0
+            self._current_preview, self._next_preview = self._next_preview, self._current_preview
+            self.preview = self._current_preview
+
+        anim_in.bind(on_complete=on_complete)
+        anim_in.start(self._next_preview)
+        anim_out.start(self._current_preview)
+
+    def _stop_slideshow(self):
+        if self._slideshow_clock:
+            Clock.unschedule(self._slideshow_clock)
+            self._slideshow_clock = None
+        Animation.stop_all(self.preview_a)
+        Animation.stop_all(self.preview_b)
 
     def _save_collage(self):
         if not self._save_started:
             self._save_started = True
             self.app.start_photo_task(self.app.save_collage)
 
-    def _load_preview_async(self, path):
+    def _load_preview_async(self, path, target_preview=None, animate=False):
+        if target_preview is None:
+            target_preview = self._current_preview
+        self._slide_token += 1
+        current_token = self._slide_token
+
         def load_image():
-            im = cv2.imread(path)
+            display_path = FileUtils.get_small_path(path)
+            if not os.path.exists(display_path):
+                display_path = path
+            im = cv2.imread(display_path)
 
             def apply_on_main(dt):
-                if im is not None:
-                    self.preview.set_image(im)
-                else:
-                    Logger.warning('ReviewScreen: cannot load preview %s', path)
+                if self._slide_token == current_token:
+                    if im is not None:
+                        target_preview.set_image(im)
+                        if animate:
+                            self._start_crossfade()
+                        else:
+                            target_preview.opacity = 1.0
+                            self.preview = target_preview
+                    else:
+                        Logger.warning('ReviewScreen: cannot load preview %s', display_path)
 
             Clock.schedule_once(apply_on_main, 0)
 
@@ -2728,11 +2930,17 @@ class ReviewScreen(ColorScreen):
 
     def on_exit(self, kwargs={}):
         Logger.info('ReviewScreen: on_exit().')
+        self._stop_slideshow()
         self._stop_home_timeout()
+        self._current_preview.opacity = 1.0
+        self._next_preview.opacity = 0.0
+        self.preview = self._current_preview
         if hasattr(self, 'qr_popup') and self.qr_popup.parent:
             self.layout.remove_widget(self.qr_popup)
         if hasattr(self, 'print_popup') and self.print_popup.parent:
-            self.layout.remove_widget(self.print_popup)
+            self.print_popup._close(None)
+            if self.print_popup.parent:
+                self.layout.remove_widget(self.print_popup)
         if self.app.ringled:
             self.app.ringled.clear()
 
@@ -2761,13 +2969,18 @@ class ReviewScreen(ColorScreen):
     def home_event(self, obj):
         if obj is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
         Logger.info('ReviewScreen: home_event().')
+        self._stop_slideshow()
         self._stop_home_timeout()
         self._save_collage()
-        self.app.transition_to(ScreenMgr.SUCCESS, format=self._current_format)
+        if getattr(self.app, 'FEEDBACK_ENABLED', False):
+            self.app.transition_to(ScreenMgr.SUCCESS, format=self._current_format)
+        else:
+            self.app.transition_to(ScreenMgr.COUNTDOWN, shot=0, format=self._current_format)
 
     def retake_event(self, obj):
         if obj is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
         Logger.info('ReviewScreen: retake_event().')
+        self._stop_slideshow()
         self._stop_home_timeout()
         self.app.delete_last_saved_session()
         self.app.purge_tmp()
@@ -2780,6 +2993,8 @@ class ReviewScreen(ColorScreen):
         self._save_collage()
         if hasattr(self, 'print_popup') and self.print_popup.parent:
             return
+        self.btn_print.disabled = True
+        self.btn_print.opacity = 0.5
         self.print_popup = PrintStatusPopup(self.app, self._current_format, on_dismiss=self._dismiss_print_popup)
         self.layout.add_widget(self.print_popup)
 
@@ -2806,6 +3021,7 @@ class ReviewScreen(ColorScreen):
 
     def timer_event(self, obj):
         Logger.info('ReviewScreen: timer_event().')
+        self._stop_slideshow()
         self._stop_home_timeout()
         self._save_collage()
         self.app.transition_to(ScreenMgr.COUNTDOWN, shot=0, format=self._current_format)
@@ -2828,6 +3044,7 @@ class SuccessScreen(ColorScreen):
 
         self.app = app
         self._current_format = 0
+        self._clock = None
 
         layout = BoxLayout(orientation='vertical')
 
@@ -2904,6 +3121,9 @@ class SuccessScreen(ColorScreen):
     def on_entry(self, kwargs={}):
         Logger.info('SuccessScreen: on_entry().')
         self._current_format = kwargs.get('format') if 'format' in kwargs else getattr(self.app, 'selected_format', 0)
+        if not getattr(self.app, 'FEEDBACK_ENABLED', False):
+            self.app.transition_to(ScreenMgr.COUNTDOWN, shot=0, format=self._current_format)
+            return
         self._feedback_recorded = False
         self.positive_feedback.disabled = False
         self.negative_feedback.disabled = False
@@ -2913,7 +3133,9 @@ class SuccessScreen(ColorScreen):
 
     def on_exit(self, kwargs={}):
         Logger.info('SuccessScreen: on_exit().')
-        Clock.unschedule(self._clock)
+        if hasattr(self, '_clock') and self._clock:
+            Clock.unschedule(self._clock)
+            self._clock = None
         if self.app.ringled:
             self.app.ringled.clear()
 

@@ -1,4 +1,8 @@
+import fcntl
+import glob
 import os
+import re
+import struct
 import threading
 import time
 import traceback
@@ -100,6 +104,119 @@ class CaptureDevice:
         im = cv2.flip(im, 0)
         cv2.imshow('Camera', im)
 
+class DummyCamera(CaptureDevice):
+    """Fallback capture device when no physical camera is connected or available."""
+    def __init__(self):
+        self._instance = None
+
+    def get_preview(self, aspect_ratio=None, zoom=None):
+        return None
+
+    def get_preview_frame_id(self):
+        return 0
+
+    def capture(self, output_name, aspect_ratio=None, zoom=None, flash_fn=None):
+        raise IOError('No camera available for capture')
+
+    def is_healthy(self):
+        return False
+
+    def close(self):
+        pass
+
+def detect_cameras():
+    """
+    Detect connected video capture devices on Linux in a lightweight, non-intrusive way.
+
+    Uses Linux V4L2 ioctl (VIDIOC_QUERYCAP) and /sys/class/video4linux to extract
+    the real camera name and filter out metadata/output nodes without locking devices.
+    Also detects DSLR cameras via gPhoto2 if available.
+
+    Returns:
+        List of dicts:
+            [
+                {
+                    'id': int | str,      # Port index (e.g. 0, 2) or identifier
+                    'device': str,        # Device path (e.g. '/dev/video0')
+                    'name': str,          # Descriptive camera name
+                    'type': str           # 'v4l2' | 'gphoto2'
+                },
+                ...
+            ]
+    """
+    cameras = []
+
+    # 1. Linux V4L2 device detection (standard on Linux kernels)
+    VIDIOC_QUERYCAP = 0x80685600
+    V4L2_CAP_VIDEO_CAPTURE = 0x00000001
+    V4L2_CAP_VIDEO_CAPTURE_MPLANE = 0x00001000
+    V4L2_CAP_DEVICE_CAPS = 0x80000000
+
+    video_nodes = sorted(
+        glob.glob('/dev/video[0-9]*'),
+        key=lambda p: int(re.search(r'\d+', p).group()) if re.search(r'\d+', p) else 999
+    )
+
+    for dev_path in video_nodes:
+        m = re.search(r'\d+', dev_path)
+        port_index = int(m.group()) if m else -1
+        name = None
+        is_capture = False
+
+        # Attempt fast, non-blocking V4L2 query via ioctl
+        try:
+            fd = os.open(dev_path, os.O_RDONLY | os.O_NONBLOCK)
+            try:
+                buf = bytearray(104)
+                fcntl.ioctl(fd, VIDIOC_QUERYCAP, buf)
+                driver, card, bus, ver, caps, dev_caps = struct.unpack('16s32s32sIII12x', buf)
+                effective_caps = dev_caps if (caps & V4L2_CAP_DEVICE_CAPS) else caps
+                is_capture = bool(effective_caps & (V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_VIDEO_CAPTURE_MPLANE))
+                name = card.split(b'\0', 1)[0].decode('utf-8', errors='ignore').strip()
+            finally:
+                os.close(fd)
+        except Exception:
+            # Fallback to sysfs if ioctl/open fails (e.g. device busy or permissions)
+            sysfs_base = f'/sys/class/video4linux/{os.path.basename(dev_path)}'
+            name_file = os.path.join(sysfs_base, 'name')
+            index_file = os.path.join(sysfs_base, 'index')
+            if os.path.exists(name_file):
+                try:
+                    with open(name_file, 'r') as f:
+                        name = f.read().strip()
+                    if os.path.exists(index_file):
+                        with open(index_file, 'r') as f:
+                            is_capture = (f.read().strip() == '0')
+                    else:
+                        is_capture = True
+                except Exception:
+                    pass
+
+        if is_capture and name:
+            cameras.append({
+                'id': port_index,
+                'device': dev_path,
+                'name': name,
+                'type': 'v4l2'
+            })
+
+    # 2. Check for gPhoto2 DSLR cameras if available
+    if gp:
+        try:
+            clist = gp.cameraList()
+            if clist.count() > 0:
+                for idx, (cam_name, cam_port) in enumerate(clist.get()):
+                    cameras.append({
+                        'id': f'gphoto2:{idx}',
+                        'device': cam_port,
+                        'name': cam_name,
+                        'type': 'gphoto2'
+                    })
+        except Exception:
+            pass
+
+    return cameras
+
 class PrintDevice:
     _instance = None
 
@@ -118,7 +235,7 @@ class PrinterStatusError(RuntimeError):
         super().__init__(', '.join(self.reasons))
 
 class Cv2Camera(CaptureDevice):
-    def __init__(self, port=-1):
+    def __init__(self, port='auto', fallback=True):
         self._preview_lock = threading.Lock()
         self._camera_lock = threading.Lock()
         self._preview_frame = None
@@ -127,21 +244,118 @@ class Cv2Camera(CaptureDevice):
         self._preview_stop = False
         self._preview_fps = 30
         self._preview_size = (1920, 1080)
+        self.port = None
+        self.device_name = None
+
         if cv2:
-            if port > -1:
-                camera = cv2.VideoCapture(port)
-                if camera.isOpened():
-                    self._configure_camera(camera, self._preview_size)
-                    self._instance = camera
-            else:
-                for i in range(3):  # Test 3 first ports
-                    camera = cv2.VideoCapture(i)
-                    if camera.isOpened():
-                        self._configure_camera(camera, self._preview_size)
+            detected_cameras = [c for c in detect_cameras() if c.get('type') == 'v4l2']
+
+            is_auto = (
+                port is None
+                or port == -1
+                or (isinstance(port, str) and (port.strip() == '' or port.strip().lower() == 'auto'))
+            )
+
+            matched_cam = None
+            if not is_auto:
+                port_clean = port.strip() if isinstance(port, str) else port
+                matched_cam = self._find_camera_match(port_clean, detected_cameras)
+                if matched_cam:
+                    target_port = matched_cam['id']
+                    target_name = matched_cam.get('name', f"Camera {target_port}")
+                    camera = self._try_open(target_port)
+                    if camera:
                         self._instance = camera
+                        self.port = target_port
+                        self.device_name = target_name
+                        Logger.info("Cv2Camera: Connected to preferred camera %s (port %s)", self.device_name, self.port)
+                    else:
+                        Logger.warning("Cv2Camera: Preferred camera %s (port %s) not available or failed to open", target_name, target_port)
+                else:
+                    if isinstance(port_clean, int) or (isinstance(port_clean, str) and (port_clean.isdigit() or port_clean.startswith('/dev/'))):
+                        target_port = int(port_clean) if (isinstance(port_clean, int) or port_clean.isdigit()) else port_clean
+                        target_name = f"Camera {target_port}"
+                        camera = self._try_open(target_port)
+                        if camera:
+                            self._instance = camera
+                            self.port = target_port
+                            self.device_name = target_name
+                            Logger.info("Cv2Camera: Connected to preferred camera %s (port %s)", self.device_name, self.port)
+                        else:
+                            Logger.warning("Cv2Camera: Preferred camera %s (port %s) not available or failed to open", target_name, target_port)
+                    else:
+                        Logger.warning("Cv2Camera: Preferred camera '%s' not found among connected devices", port_clean)
+
+            # 2. If preferred failed or none specified (auto), automatically select an available V4L2 camera
+            if not self._instance and fallback:
+                for candidate in detected_cameras:
+                    cand_id = candidate.get('id')
+                    # Skip the one that already failed
+                    if self.port is not None and cand_id == self.port:
+                        continue
+                    if matched_cam and cand_id == matched_cam.get('id'):
+                        continue
+                    camera = self._try_open(cand_id)
+                    if camera:
+                        self._instance = camera
+                        self.port = cand_id
+                        self.device_name = candidate.get('name', f"Camera {cand_id}")
+                        if is_auto:
+                            Logger.info("Cv2Camera: Auto-selected camera %s (port %s)", self.device_name, self.port)
+                        else:
+                            Logger.info("Cv2Camera: Automatically fell back to camera %s (port %s)", self.device_name, self.port)
                         break
-                    camera.release()
-        if not self._instance: raise Exception('Cannot find any CV2 camera or CV2 is not installed.')
+
+            # 3. Fallback for environments where detect_cameras found nothing (legacy probe)
+            if not self._instance and fallback and not detected_cameras:
+                for i in range(3):
+                    if matched_cam and i == matched_cam.get('id'):
+                        continue
+                    camera = self._try_open(i)
+                    if camera:
+                        self._instance = camera
+                        self.port = i
+                        self.device_name = f"Camera {i}"
+                        Logger.info("Cv2Camera: Connected to port %s via probe", i)
+                        break
+
+        if not self._instance:
+            raise Exception('Cannot find any CV2 camera or CV2 is not installed.')
+
+    def _find_camera_match(self, port, detected_cameras):
+        """Match port specification with detected cameras list."""
+        if port is None or (isinstance(port, str) and (port.strip() == '' or port.strip().lower() == 'auto')):
+            return None
+        if isinstance(port, int) or (isinstance(port, str) and port.isdigit()):
+            pid = int(port)
+            for c in detected_cameras:
+                if c.get('id') == pid:
+                    return c
+        if isinstance(port, str) and port.startswith('/dev/video'):
+            for c in detected_cameras:
+                if c.get('device') == port:
+                    return c
+        if isinstance(port, str):
+            pstr = port.strip()
+            plow = pstr.lower()
+            for c in detected_cameras:
+                if plow == c.get('name', '').strip().lower():
+                    return c
+            for c in detected_cameras:
+                if plow in c.get('name', '').lower():
+                    return c
+        return None
+
+    def _try_open(self, target):
+        try:
+            camera = cv2.VideoCapture(target)
+            if camera.isOpened():
+                self._configure_camera(camera, self._preview_size)
+                return camera
+            camera.release()
+        except Exception as e:
+            Logger.debug("Cv2Camera: Error opening camera %s: %s", target, e)
+        return None
 
     def _configure_camera(self, camera, size):
         camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
@@ -713,7 +927,7 @@ class DeviceUtils:
     _capture = None
     _printer = None
 
-    def __init__(self, printer_name=None, picamera2_port=0, cv2_port=2, zoom=None,
+    def __init__(self, printer_name=None, picamera2_port=0, cv2_port='auto', zoom=None,
                  dslr_liveview_params=None, dslr_capture_params=None):
         self._zoom = zoom
 
@@ -767,22 +981,31 @@ class DeviceUtils:
             self._preview = cv2_camera
             self._capture = cv2_camera
         else:
-            Logger.info('Cannot find any camera nor DSLR')
-            raise Exception('This app requires at least a piCamera, a DSLR or a webcam to work.')
+            Logger.warning('DeviceUtils: Cannot find any camera nor DSLR. Starting in camera-less mode.')
+            self._preview = DummyCamera()
+            self._capture = DummyCamera()
+
+    @staticmethod
+    def detect_cameras():
+        return detect_cameras()
 
     def has_physical_flash(self):
-        return self._capture.has_physical_flash()
+        return self._capture.has_physical_flash() if self._capture else False
 
     def get_preview_fps(self):
-        return self._preview.get_preview_fps()
+        return self._preview.get_preview_fps() if self._preview else 30
 
     def get_preview_frame_id(self):
-        return self._preview.get_preview_frame_id()
+        return self._preview.get_preview_frame_id() if self._preview else 0
 
     def get_preview(self, aspect_ratio=None):
+        if not self._preview:
+            return None
         return self._preview.get_preview(aspect_ratio=aspect_ratio, zoom=self._zoom)
 
     def capture(self, output_name, aspect_ratio=None, flash_fn=None):
+        if not self._capture:
+            raise IOError('No camera available for capture')
         return self._capture.capture(output_name, aspect_ratio, self._zoom, flash_fn)
 
     def has_printer(self):
@@ -799,15 +1022,19 @@ class DeviceUtils:
         """Return cheap, non-invasive device health information for the kiosk UI."""
         preview = self._preview
         capture = self._capture
-        camera_names = [type(preview).__name__]
-        if capture is not preview:
-            camera_names.append(type(capture).__name__)
+        if preview and preview.is_healthy():
+            camera_names = [type(preview).__name__]
+            if capture is not preview and capture.is_healthy():
+                camera_names.append(type(capture).__name__)
+            camera_name_str = ' + '.join(camera_names)
+        else:
+            camera_name_str = 'None'
 
         printer_name = getattr(self._printer, '_name', None)
         printer_status = self.get_printer_status()
         return {
             'camera_ok': bool(preview and capture and preview.is_healthy() and capture.is_healthy()),
-            'camera_name': ' + '.join(camera_names),
+            'camera_name': camera_name_str,
             'printer_ok': printer_status['ok'],
             'printer_name': printer_name,
             'printer_state': printer_status['state'],

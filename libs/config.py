@@ -94,6 +94,10 @@ class Config:
     def get_web_port(self):
         return 5000
 
+    def get_camera(self):
+        camera = self._get_string(('Camera', 'Capture'), 'CAMERA', fallback='auto').strip()
+        return camera if camera else 'auto'
+
     def get_countdown(self):
         return self._get_int(('Capture', 'Picture'), 'COUNTDOWN', fallback=5)
 
@@ -102,6 +106,15 @@ class Config:
 
     def get_processing_timeout(self):
         return max(5, self._get_int(('Capture', 'Picture'), 'PROCESSING_TIMEOUT', fallback=30))
+
+    def get_review_slide_duration(self):
+        return max(0.5, self._get_float(('Review', 'Capture'), 'SLIDE_DURATION', fallback=2.0))
+
+    def get_review_crossfade_duration(self):
+        return max(0.1, min(2.0, self._get_float(('Review', 'Capture'), 'CROSSFADE_DURATION', fallback=0.45)))
+
+    def get_feedback_enabled(self):
+        return self._get_boolean(('Feedback',), 'ENABLED', fallback=False)
 
     def get_save_timeout(self):
         return max(5, self._get_int(('Storage', 'Picture'), 'SAVE_TIMEOUT', fallback=30))

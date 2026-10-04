@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import threading
 import zipfile
 from datetime import datetime
@@ -105,6 +106,20 @@ class WebServer:
             ),
         },
         {
+            'title': 'Camera',
+            'description': 'Select video capture device for preview and capture.',
+            'fields': (
+                {
+                    'section': 'Camera',
+                    'option': 'CAMERA',
+                    'label': 'Camera device',
+                    'control': 'select',
+                    'default': 'auto',
+                    'help': 'Select a connected camera or Auto for automatic selection.',
+                },
+            ),
+        },
+        {
             'title': 'Capture',
             'description': 'Camera countdown, calibration and preview behavior.',
             'fields': (
@@ -199,6 +214,30 @@ class WebServer:
 
     def t(self, key, default=None, **kwargs):
         return self.i18n.t(key, default=default, **kwargs)
+
+    @staticmethod
+    def get_local_ip():
+        """Determine local network IP address dynamically."""
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(('10.254.254.254', 1))
+            ip = s.getsockname()[0]
+        except Exception:
+            try:
+                ip = socket.gethostbyname(socket.gethostname())
+            except Exception:
+                ip = '127.0.0.1'
+        finally:
+            s.close()
+        return ip if ip and not ip.startswith('127.') else '127.0.0.1'
+
+    def get_admin_url(self):
+        """Construct full admin URL using detected local IP and configured port."""
+        if self.host and self.host not in ('0.0.0.0', '::'):
+            host = self.host
+        else:
+            host = self.get_local_ip()
+        return f'http://{host}:{self.port}/admin'
 
     def _watchdog_loop(self):
         while not self._watchdog_stop.wait(timeout=5):
@@ -531,9 +570,34 @@ class WebServer:
         if field_spec.get('none_means_empty') and value.upper() == 'NONE':
             return ''
 
+        if field_spec['option'] == 'CAMERA':
+            if not value or value.lower() in ('auto', 'none'):
+                return 'auto'
+            return value
+
         return value
 
     def _build_select_choices(self, field_spec, current_value):
+        if field_spec.get('option') == 'CAMERA':
+            detected = []
+            try:
+                from libs.device_utils import detect_cameras
+                detected = detect_cameras()
+            except Exception as e:
+                Logger.warning('WebServer: Error detecting cameras: %s', e)
+
+            choices = [('auto', 'Auto (Automatic selection)')]
+            for cam in detected:
+                name = cam.get('name', '')
+                device = cam.get('device', '')
+                label = f"{name} ({device})" if device else name
+                choices.append((name, label))
+
+            choice_values = {value for value, _label in choices}
+            if current_value and current_value not in choice_values:
+                choices.append((current_value, f'Current: {current_value} (not detected)'))
+            return choices
+
         choices = list(field_spec.get('choices', ()))
         choice_values = {value for value, _label in choices}
         if current_value and current_value not in choice_values:
@@ -663,6 +727,9 @@ class WebServer:
         if option == 'CALIBRATION':
             return value or 'None'
 
+        if option == 'CAMERA':
+            return value or 'auto'
+
         if number_type == 'int':
             if value == '':
                 raise ValueError(f'{field_spec["label"]} is required.')
@@ -684,7 +751,7 @@ class WebServer:
             return str(parsed_value)
 
         if number_type == 'optional_int':
-            if value == '':
+            if value == '' or value.upper() == 'NONE':
                 return 'None'
             parsed_value = int(value)
             if 'min' in field_spec and parsed_value < field_spec['min']:

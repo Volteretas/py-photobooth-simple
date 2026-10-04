@@ -66,8 +66,10 @@ class PhotoboothApp(App):
 
         # Load configuration
         config = Config()
+        self.config = config
         self.FULLSCREEN = config.get_fullscreen()
         self.LANGUAGE = config.get_language()
+        self.CAMERA = config.get_camera()
         self.SHARE = config.get_share()
         self.WEB_PORT = config.get_web_port()
         self.STARTSCREEN_BACKGROUND_IMAGE = config.get_startscreen_background_image()
@@ -82,6 +84,9 @@ class PhotoboothApp(App):
         self.COUNTDOWN = config.get_countdown()
         self.CAPTURE_TIMEOUT = config.get_capture_timeout()
         self.PROCESSING_TIMEOUT = config.get_processing_timeout()
+        self.REVIEW_SLIDE_DURATION = config.get_review_slide_duration()
+        self.REVIEW_CROSSFADE_DURATION = config.get_review_crossfade_duration()
+        self.FEEDBACK_ENABLED = config.get_feedback_enabled()
         self.DCIM_DIRECTORY = config.get_dcim_directory()
         self.DISK_MIN_FREE_GB = config.get_disk_min_free_gb()
         self.DISK_MAX_USED_PERCENT = config.get_disk_max_used_percent()
@@ -137,6 +142,7 @@ class PhotoboothApp(App):
         self.ringled = RINGLED
         self.devices = DeviceUtils(
             printer_name=self.PRINTER,
+            cv2_port=self.CAMERA,
             zoom=self.CALIBRATION,
             dslr_liveview_params=self._dslr_liveview_params,
             dslr_capture_params=self._dslr_capture_params,
@@ -619,6 +625,7 @@ class PhotoboothApp(App):
                 old_devices.close()
                 replacement = DeviceUtils(
                     printer_name=self.PRINTER,
+                    cv2_port=self.config.get_camera(),
                     zoom=self.CALIBRATION,
                     dslr_liveview_params=self._dslr_liveview_params,
                     dslr_capture_params=self._dslr_capture_params,
@@ -723,6 +730,7 @@ class PhotoboothApp(App):
 
         self.devices = DeviceUtils(
             printer_name=self.PRINTER,
+            cv2_port=self.config.get_camera(),
             zoom=self.CALIBRATION,
             dslr_liveview_params=self._dslr_liveview_params,
             dslr_capture_params=self._dslr_capture_params,

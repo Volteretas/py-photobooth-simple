@@ -742,7 +742,7 @@ Builder.load_string("""
 class RoundedButton(FeedbackButtonBehavior, Label):
     background_color = ListProperty([1, 1, 1, 1])
 
-def make_icon_button(icon, size, pos_hint={}, font='Roboto', font_size=sp(10), font_size_fraction=0, bgcolor=(1,1,1,1), badge=None, badge_font_size=sp(10), badge_color=(1,0,0,1), on_release=None, progress=False, progress_color=(1,1,1,1), progress_line_width_fraction=0.045):
+def make_icon_button(icon, size, pos_hint={}, font='Roboto', font_size=sp(10), font_size_fraction=0, bgcolor=(1,1,1,1), color=(1,1,1,1), badge=None, badge_font_size=sp(10), badge_color=(1,0,0,1), on_release=None, progress=False, progress_color=(1,1,1,1), progress_line_width_fraction=0.045):
     # If size >= 1, use parent size (for buttons in BoxLayouts), otherwise use Window size
     use_parent = (size >= 1.0)
     parent = SquareFloatLayout(
@@ -759,6 +759,7 @@ def make_icon_button(icon, size, pos_hint={}, font='Roboto', font_size=sp(10), f
         size_hint=(1, 1),
         pos_hint={'center_x': 0.5, 'center_y': 0.5},
         background_color=bgcolor,
+        color=color,
         max_font_size=font_size,
         wh_fraction=font_size_fraction,
     )

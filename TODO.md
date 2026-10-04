@@ -72,7 +72,40 @@ Este documento resume las modificaciones recientes, los problemas resueltos, el 
 * **Mantenimiento del template durante las sesiones**:
   * El formato seleccionado se conserva íntegramente a lo largo de todas las sesiones sucesivas y a través de los ciclos `ReviewScreen` $\rightarrow$ `SuccessScreen` $\rightarrow$ `CountdownScreen`.
 
-### E. Ajustes Adicionales en el Árbol de Trabajo
+### E. Presentación Automática (Slideshow) con Transición Suave en ReviewScreen
+* **Presentación de fotos individuales previa al collage**:
+  * Al ingresar a `ReviewScreen`, se inicia automáticamente un slideshow que proyecta secuencialmente cada foto individual capturada (Foto 1, Foto 2, ..., Foto N) durante un intervalo configurable (`SLIDE_DURATION`), finalizando en el collage final.
+  * La cantidad de fotos se determina dinámicamente según el template activo (`shots_to_take`), soportando cualquier formato (1, 2, 3 o más fotos).
+  * Al alcanzar el collage final, el slideshow se detiene automáticamente y el collage permanece fijo en pantalla.
+* **Transición Crossfade Real**:
+  * Se implementó una arquitectura de doble capa con widgets `preview_a` y `preview_b` superpuestos dentro del contenedor de imagen.
+  * Al cambiar de diapositiva, la imagen entrante se prepara en la capa inactiva y ambas capas se interpolan suavemente mediante `kivy.animation.Animation(opacity=..., d=CROSSFADE_DURATION)`, logrando un desvanecimiento cruzado sin fondos oscuros ni parpadeos visuales.
+  * Duración de la transición configurable mediante `CROSSFADE_DURATION` (por defecto 0.45s).
+  * Cancelación segura de timers y animaciones activas en `on_exit`, `home_event`, `retake_event` y `timer_event`.
+* **Banner de Impresión No Intrusivo**:
+  * Se reemplazó el popup modal bloqueante por un banner flotante integrado (`PrintStatusPopup` / `PrintStatusBanner`) que no tapa la pantalla.
+  * Los usuarios pueden seguir observando la presentación y la vista previa mientras el trabajo se envía a la cola de la impresora.
+  * Deshabilita el botón de impresión durante el envío y lo reactiva con retroalimentación clara si ocurre un fallo.
+
+### F. Pantalla de Valoración (SuccessScreen / Feedback) Opcional y Configurable
+* **Configuración centralizada en `config.ini`**:
+  * Se agregó la sección `[Feedback]` con la clave `ENABLED`:
+    ```ini
+    [Feedback]
+    # If set to True, the feedback/rating screen (SuccessScreen) will be shown after each session
+    ENABLED = False
+    ```
+  * En `libs/config.py`, se implementó `get_feedback_enabled()` con valor por defecto seguro `False` si la clave o sección no existen.
+  * Expuesto en la instancia de la aplicación como `app.FEEDBACK_ENABLED`.
+* **Omisión completa de la pantalla (`ENABLED = False`)**:
+  * Cuando `FEEDBACK_ENABLED` es `False`, al pulsar el botón Home/Volver en `ReviewScreen`, la pantalla intermedia de valoración (`SuccessScreen`) se omite por completo.
+  * El flujo transiciona directamente a la vista previa de cámara en modo reposo (`CountdownScreen, shot=0`), conservando el formato seleccionado, con miniaturas limpias y sin temporizador de inactividad de 30 segundos.
+  * Redirección de resguardo en `SuccessScreen.on_entry`: si la pantalla es invocada directamente mientras está deshabilitada, redirige de inmediato a `CountdownScreen (shot=0)` sin montar timers ni procesar eventos.
+* **Conservación íntegra del comportamiento original (`ENABLED = True`)**:
+  * Si se activa `ENABLED = True`, `ReviewScreen` transiciona a `SuccessScreen`, permitiendo recopilar la opinión del usuario (me gusta / no me gusta / estadísticas) con su temporizador de 5 segundos habitual.
+  * No se eliminó ninguna lógica de negocio de valoración ni de métricas.
+
+### G. Ajustes Adicionales en el Árbol de Trabajo
 * `libs/screens.py` (`ConfirmCaptureScreen`):
   * Eliminada la dependencia fija a `_current_format = 1` en `__init__`.
   * Los iconos indicadores (`self.icons`) se sincronizan y reconstruyen dinámicamente en `on_entry()` según `total_shots`, soportando templates de cualquier cantidad de fotos (1, 2, 3, 4 o más).
@@ -80,7 +113,7 @@ Este documento resume las modificaciones recientes, los problemas resueltos, el 
   * Incorporada la clave `"start.change_template"` en inglés (`"CHANGE TEMPLATE"`) y francés (`"CHANGER DE MODÈLE"`).
 * `libs/gphoto2.py`: Definición explícita de `argtypes` y `restype` para llamadas de la API C de gPhoto2 (`gp_list_new`, `gp_camera_autodetect`, `gp_list_count`).
 * `libs/device_utils.py`: Configuración de puerto de captura OpenCV (`cv2_port=2`).
-* `config.ini`: Configuración local de pruebas (idioma `en`, impresora `EPSON-L805-Series`, `SHARE=False`).
+* `config.ini`: Configuración local de pruebas (idioma `en`, impresora `EPSON-L805-Series`, `SHARE=False`, sección `[Review]` y sección `[Feedback]`).
 
 ---
 
@@ -139,15 +172,20 @@ Este documento resume las modificaciones recientes, los problemas resueltos, el 
 │                                        [Procesamiento y generación de collage]        │
 │                                                      │                                │
 │                                                      ▼                                │
-│                                        [ReviewScreen] (Impresión / QR)                │
+│                                        [ReviewScreen] (Impresión / QR / Slideshow)    │
+│                                         • Slideshow automático con crossfade de fotos.│
+│                                         • Banner no intrusivo de estado de impresión. │
 │                                         • Retake: reinicia sesión previa              │
 │                                         • Imprimir / Compartir QR                     │
 │                                         • Timeout de inactividad o botón Home         │
 │                                                      │                                │
-│                                                      ▼                                │
-│                                        [SuccessScreen] (Feedback opcional)            │
-│                                         • Timeout 5s, feedback, o tap/tecla           │
-│                                                      │                                │
+│                        ┌─────────────────────────────┴────────────────────────────┐   │
+│                        ▼ (si [Feedback] ENABLED=True)                             │   │
+│         [SuccessScreen] (Feedback / Valoración)                                   │   │
+│          • Timeout 5s, feedback, o tap/tecla                                      │   │
+│                        │                                                          │   │
+│                        └─────────────────────────────┬────────────────────────────┘   │
+│                                                      │ (si ENABLED=False directo)     │
 └──────────────────────────────────────────────────────┴────────────────────────────────┘
 ```
 
@@ -155,8 +193,9 @@ Este documento resume las modificaciones recientes, los problemas resueltos, el 
 
 ## 4. Verificaciones y Pruebas Realizadas
 
-Se diseñó e integró una suite de pruebas unitarias automatizadas (`test_flow_navigation.py`) ejecutada bajo entorno Kivy headless con backend mock. Todos los tests concluyeron exitosamente (**9/9 OK**):
+Se diseñaron e integraron suites de pruebas automatizadas ejecutadas bajo entorno Kivy headless con backend mock:
 
+### Suite 1: Navegación de Flujo y Persistencia (`test_flow_navigation.py` - 9/9 OK)
 1. **`test_01_selected_format_initialized`**: Verifica que la aplicación siempre inicie con un índice de plantilla válido dentro del rango de formatos disponibles.
 2. **`test_template_persistence`**: Valida que al asignar `app.selected_format` se guarde el archivo `DCIM/.last_template` con el nombre del archivo JSON correspondiente y que `_load_last_template()` lo restaure fielmente.
 3. **`test_start_screen_transitions`**: Comprueba que pulsar en `StartScreen` o accionar teclado transiciona directamente a `CountdownScreen` en reposo (`shot=0`) con el template seleccionado, y que el botón `btn_change_template` abre `SelectFormatScreen`.
@@ -167,6 +206,16 @@ Se diseñó e integró una suite de pruebas unitarias automatizadas (`test_flow_
 8. **`test_success_screen_transitions`**: Valida que todas las salidas de `SuccessScreen` (timer 5s, feedback, clic, teclado) transicionen a `CountdownScreen` con `shot=0` y el mismo formato.
 9. **`test_usb_copy_allowed`**: Comprueba que la copia por pendrive USB esté permitida tanto en `StartScreen` como en `CountdownScreen` en reposo (`shot=0` y sin cuenta regresiva activa).
 
+### Suite 2: Slideshow, Crossfade y Feedback Configurable (`test_review_slideshow.py` - 9/9 OK)
+1. **`test_01_slideshow_list_built_correctly`**: Verifica que las diapositivas incluyan todas las capturas individuales del template seguidas del collage final.
+2. **`test_02_slideshow_single_photo_no_advance`**: Comprueba que en plantillas de 1 foto no se programe avance de diapositivas innecesario.
+3. **`test_03_slideshow_advances_and_stops_at_collage`**: Valida el avance programado slide por slide y la detención definitiva al alcanzar el collage final.
+4. **`test_04_crossfade_dual_preview_animations`**: Comprueba la interpolación de opacidad simultánea de `preview_a` y `preview_b` mediante `Animation`.
+5. **`test_05_slideshow_stops_on_exit`**: Asegura que al salir de la pantalla o cancelar la sesión se limpien los relojes y animaciones del slideshow.
+6. **`test_06_print_banner_non_blocking`**: Verifica la presentación del banner flotante no intrusivo sin bloquear la pantalla de Review.
+7. **`test_07_print_failure_restores_button`**: Valida que en caso de error en la impresora el botón se restaure y el mensaje de error se informe adecuadamente.
+8. **`test_08_load_preview_uses_small_path_when_available`**: Comprueba la carga asíncrona priorizando las versiones optimizadas en disco (`_small.jpg`).
+9. **`test_09_feedback_config_and_transitions`**: Valida que con `FEEDBACK_ENABLED = False` (por omisión o explícito) `ReviewScreen.home_event` y `SuccessScreen.on_entry` salten directo a `CountdownScreen (shot=0)`, y que con `FEEDBACK_ENABLED = True` transicione a `SuccessScreen`.
 ---
 
 ## 5. Tareas Pendientes para Futuras Sesiones
