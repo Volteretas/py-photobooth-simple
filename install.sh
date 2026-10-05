@@ -337,7 +337,7 @@ else
     # headers are included here so that pycups builds reliably in Step 2.
     DEB_BASE="build-essential git python3-pip python3-venv python3-dev libgl1 libcups2-dev"
     FED_BASE="gcc make git python3-pip python3-devel mesa-libGL cups-devel"
-    ARCH_BASE="base-devel git python-pip libglvnd libcups"
+    ARCH_BASE="base-devel git python-pip python313 libglvnd libcups"
 
     pkg_install "$DEB_BASE" "$FED_BASE" "$ARCH_BASE"
 
@@ -354,10 +354,18 @@ VENV_DIR="$SCRIPT_DIR/.venv"
 
 if [ ! -d "$VENV_DIR" ]; then
     print_info "Creating Python virtual environment in $VENV_DIR..."
-    if ! python3 -m venv "$VENV_DIR"; then
-        print_error "Failed to create Python virtual environment."
-        print_error "Please install the Python venv package for your distribution (e.g., sudo apt install python3-venv, sudo dnf install python3-virtualenv, or sudo pacman -S python)."
-        exit 1
+    if [ "$DISTRO_FAMILY" = "arch" ]; then
+        if ! /usr/bin/python3.13 -m venv "$VENV_DIR"; then
+            print_error "Failed to create Python virtual environment with /usr/bin/python3.13."
+            print_error "Please install the python313 package (e.g., sudo pacman -S python313)."
+            exit 1
+        fi
+    else
+        if ! python3 -m venv "$VENV_DIR"; then
+            print_error "Failed to create Python virtual environment."
+            print_error "Please install the Python venv package for your distribution (e.g., sudo apt install python3-venv, sudo dnf install python3-virtualenv, or sudo pacman -S python)."
+            exit 1
+        fi
     fi
     print_success "Python virtual environment created"
 fi
@@ -504,7 +512,7 @@ if ask_yes_no "Step 7/9: Do you want to install printer support (CUPS)?"; then
         fi
 
         # Start and enable CUPS service
-        local cups_started=false
+        cups_started=false
         if command_exists systemctl; then
             if sudo systemctl enable --now cups; then
                 cups_started=true
