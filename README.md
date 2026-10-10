@@ -37,69 +37,6 @@ A simple, robust, and intuitive photobooth application designed to be straightfo
 | ![Review Screen](docs/6.png) | ![Gallery Screen](docs/3.png) |
 | *Automated slideshow transition to final collage with print button* | *Browse past sessions by date/time, navigate, and reprint collages* |
 
-## Screen Flow
-
-The application follows an intuitive navigation flow with direct camera preview and continuous standby:
-
-```
-                            ┌────────────────────────┐
-                            │      Start Screen      │
-                            │   (Welcome / Kiosk)    │
-                            └──┬──────┬───────────┬──┘
-             Touch / Keyboard  │      │ Template  │ Gallery
-                               ▼      ▼ Button    ▼ Button
-     ┌────────────────────────────┐  ┌───────────┐ ┌──────────────┐
-┌───►│       CountdownScreen      │  │  Select   │ │   Gallery    │
-│    │  (Live Preview / Standby)  │  │  Format   │ │    Screen    │
-│    └─────────────┬──────────────┘  └─────┬─────┘ └──────┬───────┘
-│                  │ Trigger Capture       │ Select       │ Pick
-│                  ▼                       │ & Save       │ Session
-│    ┌────────────────────────────┐        │              ▼
-│    │     Countdown Running      │        │       ┌──────────────┐
-│    │     (Circular Counter)     │        │       │Gallery Detail│
-│    └─────────────┬──────────────┘        │       │(Reprint/Nav) │
-│                  │ Shot Complete         │       └──────────────┘
-│                  ▼                       │
-│    ┌────────────────────────────┐        │
-│    │    ConfirmCaptureScreen    │        │
-│    │  (Dynamic Shot Indicators) │        │
-│    └──────┬──────────────┬──────┘        │
-│    Retake │              │ Keep          │
-│    Shot   │              │ Shot          │
-│           │              ▼               │
-│           │     [More shots left?]       │
-│           │      ├── Yes ───────────────►│ (auto_start next shot)
-│           │      └── No                  │
-│           │          │ All shots done    │
-│           │          ▼                   │
-│           │    ┌────────────┐            │
-│           │    │ Processing │            │
-│           │    │  Collage   │            │
-│           │    └─────┬──────┘            │
-│           │          │ Saved             │
-│           │          ▼                   │
-│           │    ┌────────────┐            │
-│           │    │   Review   │◄───────────┘
-│           │    │ Slideshow  │
-│           │    └─────┬──────┘
-│           │          │
-│           │    ┌─────┴────────────────┐
-│           │    │ Actions:             │
-│           │    │ • Print (CUPS)       │
-│           │    │ • Share (QR Code)    │
-│           │    │ • Retake session     │
-│           │    └─────┬────────────────┘
-│           │          │ Finish / Timeout
-│           │          ▼
-│           │    [Feedback ENABLED?]
-│           │     ├── Yes ──► ┌───────────────┐
-│           │     │           │ SuccessScreen │ (Rating 5s)
-│           │     │           └───────┬───────┘
-│           │     └── No ─────────────┤
-│           │                         ▼
-└───────────┴─────────────────────────┴────────────────────── (Ready for next guest!)
-```
-
 ### Screen Descriptions
 
 - **Start Screen (`docs/1.png`):** The welcome kiosk screen. Touching anywhere starts the camera preview immediately using the active template. Quick-access buttons allow changing the template, opening the photo gallery, viewing hardware diagnostics, toggling fullscreen, or launching web admin settings.
@@ -122,33 +59,6 @@ The application supports multiple camera types on Linux:
 - **Raspberry Pi Camera Module 3:** Supported via Picamera2 / libcamera.
 - **DSLR Cameras via gPhoto2:** Supported in code for compatible Canon, Nikon, and Sony DSLRs via libgPhoto2.
 - **USB Webcams via OpenCV:** Standard V4L2 USB webcams.
-
-### Intelligent Camera Selection and Automatic Fallback
-
-- **Automatic Detection (`CAMERA = auto`):** Automatically detects connected V4L2 video devices and gPhoto2 DSLRs non-intrusively via Linux ioctls.
-- **Manual Device Selection:** You can specify a camera port index (e.g. `0`, `2`), device path (e.g. `/dev/video0`), or camera name (e.g. `Logitech Webcam C920`) in `config.ini` or via the Web Admin interface.
-- **Automatic Fallback:** If the preferred camera fails to open or is disconnected, the system automatically falls back to an available connected camera without crashing.
-- **Hybrid Setup Support:** Use a Raspberry Pi Camera or USB webcam for live preview and a DSLR for capture. The preview and capture fields of view can be aligned using the calibration tool:
-  ```bash
-  python tools/calibrate_zoom.py
-  ```
-
-## Gallery & Storage Structure
-
-Photo sessions and collages are saved inside `DCIM_DIRECTORY` (default: `./DCIM`):
-
-```
-DCIM/
-├── gallery/
-│   ├── strips/         # Full-resolution collage strips ({session_id}.jpg)
-│   ├── small/strips/   # Lightweight thumbnails for fast gallery browsing ({session_id}_small.jpg)
-│   └── photos/         # Raw captured photos ({session_id}_01.jpg, {session_id}_02.jpg, ...)
-├── save/               # Session data and statistics (.stats.json)
-├── tmp/                # Temporary directory for current session processing
-└── .last_template      # Stores the filename of the active template across reboots
-```
-
-The application automatically manages disk space, monitors free storage thresholds, and migrates legacy thumbnails into the optimized `gallery/small/strips/` directory on startup.
 
 ## Web Admin & Configuration
 
@@ -204,18 +114,6 @@ The visual template editor is an interactive web-based tool for creating and cus
 
 For detailed step-by-step instructions, hardware wiring, kiosk configuration, and CUPS setup, see [INSTALLATION.md](INSTALLATION.md).
 
-### Quick Start
-
-Install and launch the interactive setup with a single command:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Volteretas/py-photobooth-simple/main/bootstrap.sh | bash
-```
-
-To install into a custom directory:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Volteretas/py-photobooth-simple/main/bootstrap.sh | PHOTOBOOTH_INSTALL_DIR=/opt/photobooth bash
 ```
 
 ### Automated Installation Script
