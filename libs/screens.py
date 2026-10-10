@@ -1505,12 +1505,14 @@ class CountdownScreen(ColorScreen):
             padding=dp(4),
         )
         self.thumbnail_slots = []
-        aspect_ratio = getattr(self.app, 'THUMBNAILS_ASPECT_RATIO', 16.0 / 9.0)
-        fit_mode = getattr(self.app, 'THUMBNAILS_IMAGE_FIT_MODE', 'contain')
-        for _ in range(3):
-            slot = ThumbnailSlot(aspect_ratio=aspect_ratio, fit_mode=fit_mode)
-            self.thumbnails_container.add_widget(slot)
-            self.thumbnail_slots.append(slot)
+        initial_shots = 3
+        try:
+            current_format = getattr(self.app, 'selected_format', 0)
+            initial_shots = self.app.get_shots_to_take(current_format)
+        except Exception:
+            initial_shots = 3
+
+        self._sync_thumbnail_slots(initial_shots)
 
         self.overlay_layout.add_widget(self.thumbnails_container)
         self.overlay_layout.bind(size=self._update_thumbnails_layout)
@@ -1518,6 +1520,30 @@ class CountdownScreen(ColorScreen):
         self._update_thumbnails_layout()
 
         self.add_widget(self.layout)
+
+    def _sync_thumbnail_slots(self, count):
+        """
+        Synchronize thumbnail slots with the required number of photos (1 to 4).
+        Updates slot count and layout when the template's required photos change.
+        """
+        try:
+            target_count = int(count)
+        except (TypeError, ValueError):
+            target_count = 3
+
+        target_count = max(1, min(4, target_count))
+
+        aspect_ratio = getattr(self.app, 'THUMBNAILS_ASPECT_RATIO', 16.0 / 9.0)
+        fit_mode = getattr(self.app, 'THUMBNAILS_IMAGE_FIT_MODE', 'contain')
+
+        if len(self.thumbnail_slots) != target_count:
+            self.thumbnails_container.clear_widgets()
+            self.thumbnail_slots = []
+            for _ in range(target_count):
+                slot = ThumbnailSlot(aspect_ratio=aspect_ratio, fit_mode=fit_mode)
+                self.thumbnails_container.add_widget(slot)
+                self.thumbnail_slots.append(slot)
+            self._update_thumbnails_layout()
 
     def _update_thumbnails_layout(self, *args):
         win_w = self.overlay_layout.width if self.overlay_layout.width > 1 else Window.width
@@ -1620,16 +1646,14 @@ class CountdownScreen(ColorScreen):
             self._start_home_timeout()
 
         total_shots = self.app.get_shots_to_take(self._current_format)
-        if total_shots > 1:
-            self.thumbnails_container.opacity = 1
-            self._refresh_thumbnails()
-            if self._clock_pending_tasks:
-                Clock.unschedule(self._clock_pending_tasks)
-                self._clock_pending_tasks = None
-            if self.app.has_pending_photo_tasks():
-                self._clock_pending_tasks = Clock.schedule_interval(self._poll_pending_filter_tasks, 0.1)
-        else:
-            self.thumbnails_container.opacity = 0
+        self._sync_thumbnail_slots(total_shots)
+        self.thumbnails_container.opacity = 1 if total_shots >= 1 else 0
+        self._refresh_thumbnails()
+        if self._clock_pending_tasks:
+            Clock.unschedule(self._clock_pending_tasks)
+            self._clock_pending_tasks = None
+        if self.app.has_pending_photo_tasks():
+            self._clock_pending_tasks = Clock.schedule_interval(self._poll_pending_filter_tasks, 0.1)
         
         self._clock = None
         self._clock_progress = None

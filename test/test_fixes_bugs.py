@@ -193,7 +193,7 @@ class TestBugFixes(unittest.TestCase):
                 'template': {
                     'name': 'Test Template B',
                     'page': {'width': 1800, 'height': 1200},
-                    'photos': []
+                    'photos': [{'x': 60, 'y': 60, 'width': 800, 'height': 600}]
                 }
             }
             res_b = client.post('/api/templates', json=payload_b)

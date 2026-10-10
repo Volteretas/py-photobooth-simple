@@ -1203,8 +1203,10 @@ class WebServer:
             if not isinstance(template_data, dict):
                 return jsonify({'error': 'Missing template object'}), 400
 
-            if 'name' not in template_data or 'page' not in template_data:
-                return jsonify({'error': 'Template must include at least name and page'}), 400
+            from libs.template_collage import validate_template_structure
+            is_valid, error_msg = validate_template_structure(template_data)
+            if not is_valid:
+                return jsonify({'error': error_msg}), 400
 
             requested_filename = payload.get('filename')
             filename = self._sanitize_template_filename(

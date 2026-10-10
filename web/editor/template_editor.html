@@ -481,7 +481,8 @@
         </div>
 
         <div class="prop-group">
-            <button class="btn btn-success" onclick="addPhotoFrame()" style="width: 100%;">+ Add Photo Frame</button>
+            <div id="photoCountDisplay" style="font-size: 13px; color: var(--text-secondary); margin-bottom: 6px;">Photo frames: 0 / 4</div>
+            <button id="addFrameBtn" class="btn btn-success" onclick="addPhotoFrame()" style="width: 100%;">+ Add Photo Frame</button>
         </div>
 
         <div class="prop-group">
@@ -547,6 +548,15 @@
                     <option value="10x15-landscape">10x15 cm Landscape</option>
                     <option value="10x15-portrait">10x15 cm Portrait</option>
                     <option value="5x15">5x15 cm Strip</option>
+                </select>
+            </div>
+            <div class="prop-group">
+                <label>Number of photos:</label>
+                <select id="newTemplatePhotos">
+                    <option value="1">1 photo</option>
+                    <option value="2">2 photos</option>
+                    <option value="3" selected>3 photos</option>
+                    <option value="4">4 photos</option>
                 </select>
             </div>
             <div class="modal-actions">
@@ -652,6 +662,38 @@
                         "print-scaling": "fit"
                     },
                     "duplicate_vertical": true
+                },
+                {
+                    "name": "2 Photos (Landscape)",
+                    "description": "Two photos side by side",
+                    "page": { "width": 1800, "height": 1200 },
+                    "photos": [
+                        { "x": 60, "y": 150, "width": 810, "height": 900 },
+                        { "x": 930, "y": 150, "width": 810, "height": 900 }
+                    ],
+                    "background": null,
+                    "foreground": null,
+                    "print_params": {
+                        "PageSize": "4x6in",
+                        "print-scaling": "fit"
+                    }
+                },
+                {
+                    "name": "4 Photos Grid (Landscape)",
+                    "description": "Four photos in 2x2 grid",
+                    "page": { "width": 1800, "height": 1200 },
+                    "photos": [
+                        { "x": 120, "y": 60, "width": 720, "height": 500 },
+                        { "x": 960, "y": 60, "width": 720, "height": 500 },
+                        { "x": 120, "y": 640, "width": 720, "height": 500 },
+                        { "x": 960, "y": 640, "width": 720, "height": 500 }
+                    ],
+                    "background": null,
+                    "foreground": null,
+                    "print_params": {
+                        "PageSize": "4x6in",
+                        "print-scaling": "fit"
+                    }
                 }
             ];
 
@@ -701,7 +743,7 @@
                     <div class="template-item-row">
                         <div class="template-item-meta">
                             <div class="template-item-name">${template.name}</div>
-                            <div class="template-item-desc">${template.description}</div>
+                            <div class="template-item-desc">${template.description ? template.description + ' • ' : ''}${template.photos ? template.photos.length : 0} photo${template.photos && template.photos.length === 1 ? '' : 's'}</div>
                         </div>
                         <div class="template-item-actions">
                             <button class="btn btn-secondary template-item-icon-btn" title="Duplicate template" onclick="event.stopPropagation(); duplicateTemplate(${index})">⧉</button>
@@ -790,6 +832,7 @@
             }
 
             renderCanvas();
+            updatePhotoCountBadge();
         }
 
         function renderCanvas() {
@@ -1199,10 +1242,27 @@
             renderCanvas();
         }
 
+        function updatePhotoCountBadge() {
+            const badge = document.getElementById('photoCountDisplay');
+            const addBtn = document.getElementById('addFrameBtn');
+            if (!badge || currentTemplateIndex < 0) return;
+            const count = (templates[currentTemplateIndex] && templates[currentTemplateIndex].photos) ? templates[currentTemplateIndex].photos.length : 0;
+            badge.textContent = `Photo frames: ${count} / 4`;
+            if (addBtn) {
+                addBtn.disabled = count >= 4;
+            }
+        }
+
         function addPhotoFrame() {
             if (currentTemplateIndex < 0) return;
 
             const template = templates[currentTemplateIndex];
+            if (!template.photos) template.photos = [];
+            if (template.photos.length >= 4) {
+                alert('A maximum of 4 photo frames is allowed per template.');
+                return;
+            }
+
             const centerX = Math.floor(template.page.width / 2 - 150);
             const centerY = Math.floor(template.page.height / 2 - 150);
 
@@ -1215,14 +1275,24 @@
 
             selectedFrameIndex = template.photos.length - 1;
             renderCanvas();
+            renderTemplateList();
+            updatePhotoCountBadge();
         }
 
         function deleteSelectedFrame() {
             if (selectedFrameIndex < 0 || currentTemplateIndex < 0) return;
 
+            const template = templates[currentTemplateIndex];
+            if (!template.photos || template.photos.length <= 1) {
+                alert('A template must have at least 1 photo frame.');
+                return;
+            }
+
             templates[currentTemplateIndex].photos.splice(selectedFrameIndex, 1);
             selectedFrameIndex = -1;
             renderCanvas();
+            renderTemplateList();
+            updatePhotoCountBadge();
         }
 
         function snapToGrid(value) {
@@ -1417,16 +1487,76 @@
             document.getElementById('newTemplateModal').classList.add('show');
             document.getElementById('newTemplateName').value = '';
             document.getElementById('newTemplateDesc').value = '';
+            if (document.getElementById('newTemplatePhotos')) {
+                document.getElementById('newTemplatePhotos').value = '3';
+            }
         }
 
         function closeNewTemplateModal() {
             document.getElementById('newTemplateModal').classList.remove('show');
         }
 
+        function generateDefaultFrames(format, photoCount, width, height) {
+            const count = Math.max(1, Math.min(4, parseInt(photoCount) || 3));
+            const frames = [];
+
+            if (format === '5x15') {
+                if (count === 1) {
+                    frames.push({ x: 30, y: 630, width: 540, height: 540 });
+                } else if (count === 2) {
+                    frames.push({ x: 30, y: 200, width: 540, height: 540 });
+                    frames.push({ x: 30, y: 1060, width: 540, height: 540 });
+                } else if (count === 3) {
+                    frames.push({ x: 30, y: 60, width: 540, height: 500 });
+                    frames.push({ x: 30, y: 650, width: 540, height: 500 });
+                    frames.push({ x: 30, y: 1240, width: 540, height: 500 });
+                } else if (count === 4) {
+                    frames.push({ x: 30, y: 30, width: 540, height: 390 });
+                    frames.push({ x: 30, y: 470, width: 540, height: 390 });
+                    frames.push({ x: 30, y: 910, width: 540, height: 390 });
+                    frames.push({ x: 30, y: 1350, width: 540, height: 390 });
+                }
+            } else if (format === '10x15-portrait') {
+                if (count === 1) {
+                    frames.push({ x: 60, y: 150, width: 1080, height: 1500 });
+                } else if (count === 2) {
+                    frames.push({ x: 150, y: 60, width: 900, height: 800 });
+                    frames.push({ x: 150, y: 940, width: 900, height: 800 });
+                } else if (count === 3) {
+                    frames.push({ x: 150, y: 60, width: 900, height: 520 });
+                    frames.push({ x: 150, y: 640, width: 900, height: 520 });
+                    frames.push({ x: 150, y: 1220, width: 900, height: 520 });
+                } else if (count === 4) {
+                    frames.push({ x: 60, y: 120, width: 500, height: 720 });
+                    frames.push({ x: 640, y: 120, width: 500, height: 720 });
+                    frames.push({ x: 60, y: 960, width: 500, height: 720 });
+                    frames.push({ x: 640, y: 960, width: 500, height: 720 });
+                }
+            } else {
+                if (count === 1) {
+                    frames.push({ x: 60, y: 60, width: 1680, height: 1080 });
+                } else if (count === 2) {
+                    frames.push({ x: 60, y: 150, width: 810, height: 900 });
+                    frames.push({ x: 930, y: 150, width: 810, height: 900 });
+                } else if (count === 3) {
+                    frames.push({ x: 60, y: 250, width: 520, height: 700 });
+                    frames.push({ x: 640, y: 250, width: 520, height: 700 });
+                    frames.push({ x: 1220, y: 250, width: 520, height: 700 });
+                } else if (count === 4) {
+                    frames.push({ x: 120, y: 60, width: 720, height: 500 });
+                    frames.push({ x: 960, y: 60, width: 720, height: 500 });
+                    frames.push({ x: 120, y: 640, width: 720, height: 500 });
+                    frames.push({ x: 960, y: 640, width: 720, height: 500 });
+                }
+            }
+            return frames;
+        }
+
         function confirmNewTemplate() {
             const name = document.getElementById('newTemplateName').value || 'New Template';
             const desc = document.getElementById('newTemplateDesc').value || 'Description';
             const format = document.getElementById('newTemplateFormat').value;
+            const photoCount = parseInt(document.getElementById('newTemplatePhotos') ? document.getElementById('newTemplatePhotos').value : 3) || 3;
 
             let width = 1800, height = 1200;
 
@@ -1445,7 +1575,7 @@
                 name: name,
                 description: desc,
                 page: { width: width, height: height },
-                photos: [],
+                photos: generateDefaultFrames(format, photoCount, width, height),
                 background: null,
                 foreground: null,
                 print_params: {
@@ -1466,6 +1596,11 @@
             if (currentTemplateIndex < 0) return;
 
             const template = templates[currentTemplateIndex];
+            if (!template.photos || template.photos.length < 1 || template.photos.length > 4) {
+                alert('Template must contain between 1 and 4 photo frames to save.');
+                return;
+            }
+
             const sourceFilename = templateSourceFiles[currentTemplateIndex];
 
             try {
@@ -1496,6 +1631,11 @@
             if (currentTemplateIndex < 0) return;
 
             const template = templates[currentTemplateIndex];
+            if (!template.photos || template.photos.length < 1 || template.photos.length > 4) {
+                alert('Template must contain between 1 and 4 photo frames to export.');
+                return;
+            }
+
             const baseName = template.name.toLowerCase().replace(/\s+/g, '_');
 
             const json = JSON.stringify(template, null, 2);
@@ -1528,12 +1668,17 @@
                         return;
                     }
 
+                    if (!importedTemplate.photos || !Array.isArray(importedTemplate.photos) || importedTemplate.photos.length < 1 || importedTemplate.photos.length > 4) {
+                        alert('Invalid template: photos must be an array containing between 1 and 4 photo frames.');
+                        return;
+                    }
+
                     templates.push(importedTemplate);
                     templateSourceFiles.push(null);
                     renderTemplateList();
                     selectTemplate(templates.length - 1);
 
-                    alert(`Template "${importedTemplate.name}" imported successfully! Don't forget to save it to the sever.`);
+                    alert(`Template "${importedTemplate.name}" imported successfully! Don't forget to save it to the server.`);
                 } catch (error) {
                     alert('Error parsing JSON file: ' + error.message);
                 }

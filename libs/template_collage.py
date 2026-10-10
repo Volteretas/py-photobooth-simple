@@ -8,6 +8,59 @@ from kivy.logger import Logger
 
 from libs.file_utils import FileUtils
 
+MIN_TEMPLATE_PHOTOS = 1
+MAX_TEMPLATE_PHOTOS = 4
+
+
+def validate_template_structure(template_data):
+    """
+    Validate the structure of a template dictionary.
+    Returns (is_valid: bool, error_message: str | None).
+    """
+    if not isinstance(template_data, dict):
+        return False, 'Template must be a dictionary/object.'
+
+    if 'name' not in template_data or not str(template_data.get('name', '')).strip():
+        return False, 'Template must include a non-empty name.'
+
+    page = template_data.get('page')
+    if not isinstance(page, dict) or 'width' not in page or 'height' not in page:
+        return False, 'Template must include a page with width and height.'
+    try:
+        if int(page['width']) <= 0 or int(page['height']) <= 0:
+            return False, 'Page dimensions must be positive numbers.'
+    except (TypeError, ValueError):
+        return False, 'Page dimensions must be valid numbers.'
+
+    photos = template_data.get('photos')
+    if not isinstance(photos, list):
+        return False, 'Template must include a list of photos.'
+
+    num_photos = len(photos)
+    if num_photos < MIN_TEMPLATE_PHOTOS or num_photos > MAX_TEMPLATE_PHOTOS:
+        return False, f'Template must contain between {MIN_TEMPLATE_PHOTOS} and {MAX_TEMPLATE_PHOTOS} photos (found {num_photos}).'
+
+    for idx, photo in enumerate(photos):
+        if not isinstance(photo, dict):
+            return False, f'Photo frame {idx + 1} must be an object.'
+        for key in ('width', 'height'):
+            if key not in photo:
+                return False, f'Photo frame {idx + 1} is missing {key}.'
+            try:
+                if float(photo[key]) <= 0:
+                    return False, f'Photo frame {idx + 1} {key} must be greater than zero.'
+            except (TypeError, ValueError):
+                return False, f'Photo frame {idx + 1} {key} must be a valid number.'
+        for key in ('x', 'y'):
+            if key not in photo:
+                return False, f'Photo frame {idx + 1} is missing coordinate {key}.'
+            try:
+                float(photo[key])
+            except (TypeError, ValueError):
+                return False, f'Photo frame {idx + 1} coordinate {key} must be a valid number.'
+
+    return True, None
+
 
 class TemplateCollage:
     """
@@ -30,6 +83,11 @@ class TemplateCollage:
         # Load template
         with open(template_path, 'r') as f:
             self._template = json.load(f)
+
+        # Validate template structure
+        is_valid, error_msg = validate_template_structure(self._template)
+        if not is_valid:
+            raise ValueError(f'Invalid template in {template_path}: {error_msg}')
         
         # Cache template properties
         self._name = self._template.get('name', 'Unnamed Template')
