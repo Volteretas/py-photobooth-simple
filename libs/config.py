@@ -175,6 +175,40 @@ class Config:
             return 'auto'
         return printer
 
+    def get_printer_quality(self, printer_name=None):
+        printer = printer_name or self.get_printer()
+        if printer and printer == 'auto':
+            try:
+                from libs.cups_utils import get_available_printers
+                avail = get_available_printers()
+                printer = avail.get('default') or (avail['printers'][0] if avail.get('printers') else None)
+            except Exception:
+                printer = None
+        if printer and printer != 'auto':
+            opt_key = f'PRINT_QUALITY_{printer}'
+            val = self._get_string(('Print', 'Picture'), opt_key, fallback='').strip()
+            if val and val.upper() != 'NONE':
+                return val
+        val = self._get_string(('Print', 'Picture'), 'PRINT_QUALITY', fallback='').strip()
+        return val if val and val.upper() != 'NONE' else None
+
+    def get_printer_media_type(self, printer_name=None):
+        printer = printer_name or self.get_printer()
+        if printer and printer == 'auto':
+            try:
+                from libs.cups_utils import get_available_printers
+                avail = get_available_printers()
+                printer = avail.get('default') or (avail['printers'][0] if avail.get('printers') else None)
+            except Exception:
+                printer = None
+        if printer and printer != 'auto':
+            opt_key = f'MEDIA_TYPE_{printer}'
+            val = self._get_string(('Print', 'Picture'), opt_key, fallback='').strip()
+            if val and val.upper() != 'NONE':
+                return val
+        val = self._get_string(('Print', 'Picture'), 'MEDIA_TYPE', fallback='').strip()
+        return val if val and val.upper() != 'NONE' else None
+
     def get_max_prints(self):
         max_prints = self._get_string(('Print', 'Picture'), 'MAX_PRINTS', fallback='None').strip()
         if not max_prints or max_prints.upper() == 'NONE':

@@ -218,12 +218,39 @@ class WebServer:
             ),
         },
         {
-            'title': 'Print & USB',
-            'description': 'Printer usage limits and USB export.',
+            'title': 'Print',
+            'description': 'Printer selection, quality, paper type and print limits.',
             'fields': (
-                {'section': 'Print', 'option': 'PRINTER', 'label': 'Printer name', 'control': 'text', 'placeholder': 'None or auto', 'none_means_empty': True, 'help': 'Leave empty to disable printing, or use auto to pick the first available CUPS printer.'},
+                {
+                    'section': 'Print',
+                    'option': 'PRINTER',
+                    'label': 'Printer',
+                    'control': 'select',
+                    'default': 'auto',
+                    'help': 'Select a connected CUPS printer, Auto for automatic selection, or None to disable printing.',
+                },
+                {
+                    'section': 'Print',
+                    'option': 'PRINT_QUALITY',
+                    'label': 'Print quality',
+                    'control': 'select',
+                    'help': 'Print quality option reported by CUPS for the selected printer.',
+                },
+                {
+                    'section': 'Print',
+                    'option': 'MEDIA_TYPE',
+                    'label': 'Paper type',
+                    'control': 'select',
+                    'help': 'Media/paper type reported by CUPS for the selected printer.',
+                },
                 {'section': 'Print', 'option': 'MAX_PRINTS', 'label': 'Maximum prints', 'control': 'number', 'number_type': 'optional_int', 'min': 0, 'step': 1, 'placeholder': 'Unlimited', 'help': 'Leave empty for unlimited prints.'},
                 {'section': 'Print', 'option': 'PRINTER_WAIT_TIMEOUT', 'label': 'Printer wait timeout (seconds)', 'control': 'number', 'number_type': 'int', 'min': 5, 'step': 1},
+            ),
+        },
+        {
+            'title': 'USB',
+            'description': 'USB export settings.',
+            'fields': (
                 {'section': 'USB', 'option': 'USB_EXPORT', 'label': 'USB export', 'control': 'checkbox', 'help': 'Automatically copy saved sessions to removable USB media.'},
                 {'section': 'USB', 'option': 'USB_MIN_FREE_GB', 'label': 'USB minimum free space (GB)', 'control': 'number', 'number_type': 'float', 'min': 0, 'step': 0.1},
                 {'section': 'USB', 'option': 'USB_COPY_TIMEOUT', 'label': 'USB copy timeout (seconds)', 'control': 'number', 'number_type': 'int', 'min': 10, 'step': 1},
@@ -648,6 +675,18 @@ class WebServer:
                 return 'auto'
             return value
 
+        if field_spec['option'] == 'PRINTER':
+            if not value or value.lower() == 'none':
+                return 'None'
+            if value.lower() == 'auto':
+                return 'auto'
+            return value
+
+        if field_spec['option'] in ('PRINT_QUALITY', 'MEDIA_TYPE'):
+            if not value or value.lower() == 'none':
+                return ''
+            return value
+
         if field_spec['option'] == 'ASPECT_RATIO':
             normalized = value.replace('/', ':')
             if normalized in {'16:9', '4:3', '1:1', '3:2', '9:16'}:
@@ -681,6 +720,26 @@ class WebServer:
                 device = cam.get('device', '')
                 label = f"{name} ({device})" if device else name
                 choices.append((name, label))
+
+            choice_values = {value for value, _label in choices}
+            if current_value and current_value not in choice_values:
+                choices.append((current_value, f'Current: {current_value} (not detected)'))
+            return choices
+
+        if field_spec.get('option') == 'PRINTER':
+            from libs.cups_utils import get_available_printers
+            avail = get_available_printers()
+            printers = avail.get('printers', [])
+            default_p = avail.get('default')
+            choices = [('None', 'None (Disabled)')]
+            if default_p:
+                choices.append(('auto', f'Auto (Default: {default_p})'))
+            else:
+                choices.append(('auto', 'Auto (Automatic selection)'))
+
+            for p in printers:
+                label = f"{p} (Default)" if p == default_p else p
+                choices.append((p, label))
 
             choice_values = {value for value, _label in choices}
             if current_value and current_value not in choice_values:
@@ -782,6 +841,28 @@ class WebServer:
         form_values = form_values or {}
         sections = []
 
+        # Resolve target printer for dynamic printer options
+        raw_printer = form_values.get('Print__PRINTER') if (form_values and 'Print__PRINTER' in form_values) else parser.get('Print', 'PRINTER', fallback='auto')
+        target_printer = None
+        if raw_printer and raw_printer.lower() == 'auto':
+            try:
+                from libs.cups_utils import get_available_printers
+                avail = get_available_printers()
+                target_printer = avail.get('default') or (avail['printers'][0] if avail.get('printers') else None)
+            except Exception:
+                target_printer = None
+        elif raw_printer and raw_printer.lower() != 'none':
+            target_printer = raw_printer
+
+        printer_features = {}
+        if target_printer:
+            try:
+                from libs.cups_utils import get_printer_features
+                printer_features = get_printer_features(target_printer)
+            except Exception as exc:
+                Logger.warning('WebServer: failed to load features for printer %s: %s', target_printer, exc)
+                printer_features = {}
+
         for section_spec in self.CONFIG_FORM_SECTIONS:
             rendered_fields = []
             for field_spec in section_spec['fields']:
@@ -805,7 +886,40 @@ class WebServer:
                 rendered_field['checked'] = bool(normalized_value) if field_spec['control'] == 'checkbox' else False
 
                 if field_spec['control'] == 'select':
-                    rendered_field['choices'] = self._build_select_choices(field_spec, normalized_value)
+                    if field_spec['section'] == 'Print' and field_spec['option'] == 'PRINT_QUALITY':
+                        q_feat = printer_features.get('quality')
+                        if q_feat and q_feat.get('choices'):
+                            rendered_field['choices'] = q_feat['choices']
+                            if field_name not in form_values:
+                                per_key = f'PRINT_QUALITY_{target_printer}'
+                                if parser.has_option('Print', per_key):
+                                    normalized_value = parser.get('Print', per_key).strip()
+                                elif parser.has_option('Print', 'PRINT_QUALITY'):
+                                    normalized_value = parser.get('Print', 'PRINT_QUALITY').strip()
+                                else:
+                                    normalized_value = q_feat.get('default', '')
+                                rendered_field['value'] = normalized_value
+                        else:
+                            rendered_field['choices'] = []
+                            rendered_field['value'] = ''
+                    elif field_spec['section'] == 'Print' and field_spec['option'] == 'MEDIA_TYPE':
+                        m_feat = printer_features.get('media_type')
+                        if m_feat and m_feat.get('choices'):
+                            rendered_field['choices'] = m_feat['choices']
+                            if field_name not in form_values:
+                                per_key = f'MEDIA_TYPE_{target_printer}'
+                                if parser.has_option('Print', per_key):
+                                    normalized_value = parser.get('Print', per_key).strip()
+                                elif parser.has_option('Print', 'MEDIA_TYPE'):
+                                    normalized_value = parser.get('Print', 'MEDIA_TYPE').strip()
+                                else:
+                                    normalized_value = m_feat.get('default', '')
+                                rendered_field['value'] = normalized_value
+                        else:
+                            rendered_field['choices'] = []
+                            rendered_field['value'] = ''
+                    else:
+                        rendered_field['choices'] = self._build_select_choices(field_spec, normalized_value)
 
                 rendered_fields.append(rendered_field)
 
@@ -848,6 +962,23 @@ class WebServer:
 
         if option == 'CAMERA':
             return value or 'auto'
+
+        if option == 'PRINTER':
+            if not value or value.lower() == 'none':
+                return 'None'
+            if value.lower() == 'auto':
+                return 'auto'
+            return value
+
+        if option == 'PRINT_QUALITY':
+            if not value or value.lower() in ('none', ''):
+                return 'None'
+            return value
+
+        if option == 'MEDIA_TYPE':
+            if not value or value.lower() in ('none', ''):
+                return 'None'
+            return value
 
         if option == 'ASPECT_RATIO':
             if not value:
@@ -963,6 +1094,40 @@ class WebServer:
                     submitted_value,
                     current_values[(field_spec['section'], field_spec['option'])],
                 )
+
+        # Validate printer options and save per-printer configuration
+        submitted_printer = updates.get(('Print', 'PRINTER'), '')
+        submitted_quality = updates.get(('Print', 'PRINT_QUALITY'), '')
+        submitted_media = updates.get(('Print', 'MEDIA_TYPE'), '')
+
+        if submitted_printer and submitted_printer.lower() not in ('none', ''):
+            target_printer = submitted_printer
+            if submitted_printer.lower() == 'auto':
+                from libs.cups_utils import get_available_printers
+                avail = get_available_printers()
+                target_printer = avail.get('default') or (avail['printers'][0] if avail.get('printers') else None)
+
+            if target_printer:
+                from libs.cups_utils import validate_printer_setting
+                if submitted_quality and submitted_quality.lower() != 'none':
+                    validate_printer_setting(target_printer, 'quality', submitted_quality)
+                    updates[('Print', f'PRINT_QUALITY_{target_printer}')] = submitted_quality
+                    updates[('Print', 'PRINT_QUALITY')] = submitted_quality
+                else:
+                    updates.pop(('Print', 'PRINT_QUALITY'), None)
+
+                if submitted_media and submitted_media.lower() != 'none':
+                    validate_printer_setting(target_printer, 'media_type', submitted_media)
+                    updates[('Print', f'MEDIA_TYPE_{target_printer}')] = submitted_media
+                    updates[('Print', 'MEDIA_TYPE')] = submitted_media
+                else:
+                    updates.pop(('Print', 'MEDIA_TYPE'), None)
+            else:
+                updates.pop(('Print', 'PRINT_QUALITY'), None)
+                updates.pop(('Print', 'MEDIA_TYPE'), None)
+        else:
+            updates.pop(('Print', 'PRINT_QUALITY'), None)
+            updates.pop(('Print', 'MEDIA_TYPE'), None)
 
         return updates, submitted_form_values
 
@@ -1197,6 +1362,70 @@ class WebServer:
             response = send_file(image_path)
             response.headers['Cache-Control'] = 'no-store'
             return response
+
+        @self.app.route('/api/admin/printer-options', methods=['GET'])
+        def get_admin_printer_options():
+            """Return CUPS features (quality, paper type) for a printer."""
+            auth_redirect = self._require_admin_auth()
+            if auth_redirect is not None:
+                return auth_redirect
+
+            printer = request.args.get('printer', '').strip()
+            if printer.lower() == 'auto':
+                from libs.cups_utils import get_available_printers
+                avail = get_available_printers()
+                printer = avail.get('default') or (avail['printers'][0] if avail.get('printers') else None)
+
+            if not printer or printer.lower() == 'none':
+                return jsonify({
+                    'printer': None,
+                    'quality': None,
+                    'media_type': None,
+                })
+
+            from libs.cups_utils import get_printer_features
+            parser = self._load_config_parser()
+            features = get_printer_features(printer)
+
+            saved_quality = None
+            if parser.has_option('Print', f'PRINT_QUALITY_{printer}'):
+                saved_quality = parser.get('Print', f'PRINT_QUALITY_{printer}').strip()
+            elif parser.has_option('Print', 'PRINT_QUALITY'):
+                saved_quality = parser.get('Print', 'PRINT_QUALITY').strip()
+
+            saved_media = None
+            if parser.has_option('Print', f'MEDIA_TYPE_{printer}'):
+                saved_media = parser.get('Print', f'MEDIA_TYPE_{printer}').strip()
+            elif parser.has_option('Print', 'MEDIA_TYPE'):
+                saved_media = parser.get('Print', 'MEDIA_TYPE').strip()
+
+            quality_payload = None
+            if features.get('quality'):
+                q = features['quality']
+                quality_payload = {
+                    'name': q['name'],
+                    'label': q['label'],
+                    'default': q['default'],
+                    'saved': saved_quality,
+                    'choices': q['choices'],
+                }
+
+            media_payload = None
+            if features.get('media_type'):
+                m = features['media_type']
+                media_payload = {
+                    'name': m['name'],
+                    'label': m['label'],
+                    'default': m['default'],
+                    'saved': saved_media,
+                    'choices': m['choices'],
+                }
+
+            return jsonify({
+                'printer': printer,
+                'quality': quality_payload,
+                'media_type': media_payload,
+            })
 
         @self.app.route('/api/admin/logs', methods=['DELETE'])
         def delete_admin_logs():

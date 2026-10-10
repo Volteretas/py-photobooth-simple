@@ -38,6 +38,7 @@ LabelBase.register(
 )
 
 from libs.config import Config
+from libs.cups_utils import get_available_printers, get_validated_cups_options
 from libs.device_utils import DeviceUtils, PrinterStatusError
 from libs.file_utils import FileUtils
 from libs.i18n import I18n
@@ -66,6 +67,7 @@ class PhotoboothApp(App):
 
         # Load configuration
         config = Config()
+        self.app_config = config
         self.config = config
         self.FULLSCREEN = config.get_fullscreen()
         self.LANGUAGE = config.get_language()
@@ -668,6 +670,42 @@ class PhotoboothApp(App):
     def track_feedback(self, positive):
         self.stats_store.track_feedback(positive)
 
+    def get_active_printer_options(self):
+        """
+        Get validated CUPS options for current active printer based on configuration.
+        Returns dict like {'PrintQuality': 'High', 'MediaType': 'PHOTOGLOSSY'}
+        """
+        printer_name = None
+        if hasattr(self, 'devices') and getattr(self.devices, '_printer', None):
+            printer_name = getattr(self.devices._printer, '_name', None)
+        if not printer_name:
+            cfg = getattr(self, 'app_config', None)
+            if cfg is None and hasattr(self, 'config') and hasattr(self.config, 'get_printer_quality'):
+                cfg = self.config
+            printer_cfg = getattr(self, 'PRINTER', None)
+            if not printer_cfg and cfg and hasattr(cfg, 'get_printer'):
+                printer_cfg = cfg.get_printer()
+            if printer_cfg and printer_cfg.lower() == 'auto':
+                avail = get_available_printers()
+                printer_name = avail.get('default') or (avail['printers'][0] if avail['printers'] else None)
+            elif printer_cfg and printer_cfg.lower() != 'none':
+                printer_name = printer_cfg
+
+        if not printer_name or printer_name.lower() in ('none', 'auto'):
+            return {}
+
+        cfg = getattr(self, 'app_config', None)
+        if cfg is None and hasattr(self, 'config') and hasattr(self.config, 'get_printer_quality'):
+            cfg = self.config
+
+        quality = None
+        media_type = None
+        if cfg and hasattr(cfg, 'get_printer_quality'):
+            quality = cfg.get_printer_quality(printer_name)
+            media_type = cfg.get_printer_media_type(printer_name)
+
+        return get_validated_cups_options(printer_name, quality_val=quality, media_type_val=media_type)
+
     def trigger_print(self, copies, format=0):
         Logger.info('PhotoboothApp: trigger_print().')
         if not self.has_printer():
@@ -676,7 +714,8 @@ class PhotoboothApp(App):
             raise RuntimeError('Print limit reached')
         options = self.print_formats[format].get_print_params()
         options['copies'] = str(copies)
-        Logger.info('PhotoboothApp: print request format=%s copies=%s printer_available=%s', format, copies, self.has_printer())
+        options.update(self.get_active_printer_options())
+        Logger.info('PhotoboothApp: print request format=%s copies=%s printer_available=%s options=%s', format, copies, self.has_printer(), options)
         self._log_disk_space('before_print')
         
         # Use duplicated print output only for templates that generate one.
@@ -943,6 +982,8 @@ class PhotoboothApp(App):
         if hasattr(self, 'print_formats') and len(self.print_formats) > 0:
             options = self.print_formats[0].get_print_params()
         options['copies'] = str(copies)
+        options.update(self.get_active_printer_options())
+        Logger.info('PhotoboothApp: trigger_reprint options=%s', options)
         self._log_disk_space('before_reprint')
 
         task_id = self.devices.print(file_path, options)

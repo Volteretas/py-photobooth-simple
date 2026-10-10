@@ -750,7 +750,7 @@
                                     {% for field in section.fields %}
                                     {% if not field.inline_with_previous %}
                                     {% set inline_next = section.fields[loop.index0 + 1] if field.inline_with_next and (loop.index0 + 1) < section.fields|length else none %}
-                                    <div class="config-field {% if field.control == 'checkbox' or field.option == 'CALIBRATION' or field.control == 'textarea' or field.option in ('TITLE', 'INSTRUCTIONS') %}full-width{% endif %}{% if inline_next %} inline-pair{% endif %}">
+                                    <div class="config-field {% if field.control == 'checkbox' or field.option == 'CALIBRATION' or field.control == 'textarea' or field.option in ('TITLE', 'INSTRUCTIONS') %}full-width{% endif %}{% if inline_next %} inline-pair{% endif %}" {% if field.option in ('PRINT_QUALITY', 'MEDIA_TYPE') and not field.choices %}style="display: none;"{% endif %}>
                                         {% if field.control == 'checkbox' %}
                                         <label class="checkbox-field" for="{{ field.id }}">
                                             <input id="{{ field.id }}" name="{{ field.name }}" type="checkbox" value="true" {% if field.checked %}checked{% endif %} {% if not admin_enabled %}disabled{% endif %}>
@@ -985,6 +985,66 @@
             }
 
             setupConfigSaveButton();
+
+            // Dynamic printer options updater
+            const printerSelect = document.getElementById('print__printer');
+            const qualitySelect = document.getElementById('print__print_quality');
+            const mediaTypeSelect = document.getElementById('print__media_type');
+
+            function updateFeatureDropdown(selectEl, featureData) {
+                if (!selectEl) return;
+                const container = selectEl.closest('.config-field');
+                if (!featureData || !featureData.choices || featureData.choices.length === 0) {
+                    selectEl.innerHTML = '';
+                    if (container) {
+                        container.style.display = 'none';
+                    }
+                    return;
+                }
+
+                if (container) {
+                    container.style.display = '';
+                }
+
+                const targetValue = featureData.saved || featureData.default || (featureData.choices[0] ? featureData.choices[0][0] : '');
+                selectEl.innerHTML = '';
+                featureData.choices.forEach(function (choice) {
+                    const optVal = choice[0];
+                    const optLabel = choice[1];
+                    const opt = document.createElement('option');
+                    opt.value = optVal;
+                    opt.textContent = optLabel;
+                    if (optVal === targetValue) {
+                        opt.selected = true;
+                    }
+                    selectEl.appendChild(opt);
+                });
+            }
+
+            function fetchPrinterFeatures(printerName) {
+                if (!printerSelect) return;
+                fetch('/api/admin/printer-options?printer=' + encodeURIComponent(printerName))
+                    .then(function (response) {
+                        if (!response.ok) {
+                            throw new Error('Failed to load printer options');
+                        }
+                        return response.json();
+                    })
+                    .then(function (data) {
+                        updateFeatureDropdown(qualitySelect, data.quality);
+                        updateFeatureDropdown(mediaTypeSelect, data.media_type);
+                        refreshConfigDirtyState();
+                    })
+                    .catch(function (error) {
+                        console.error('Error fetching printer features:', error);
+                    });
+            }
+
+            if (printerSelect) {
+                printerSelect.addEventListener('change', function () {
+                    fetchPrinterFeatures(printerSelect.value);
+                });
+            }
 
             if (!preview || !previewImage) {
                 return;

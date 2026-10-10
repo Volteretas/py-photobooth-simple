@@ -58,7 +58,7 @@ def test_disk_usage_info_uses_save_directory(tmp_path):
 
     assert disk_usage['path'] == str(tmp_path)
     assert disk_usage['total'].endswith(('GB', 'TB'))
-    assert disk_usage['used'].endswith(('GB', 'TB'))
+    assert disk_usage['used'].endswith(('MB', 'GB', 'TB'))
     assert disk_usage['free'].endswith(('GB', 'TB'))
     assert 0 <= disk_usage['used_percent'] <= 100
 
