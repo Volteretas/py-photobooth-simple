@@ -1,5 +1,5 @@
 # Simple PhotoBooth
-
+![Banner](assets/banner.jpeg) 
 A simple, robust, and intuitive photobooth application designed to be straightforward and accessible for everyone, including children. Built with Python and Kivy, this project provides a streamlined photo-taking experience without unnecessary complexity, suitable for events, parties, DIY kiosks, and photobooth projects.
 
 > [!NOTE]
