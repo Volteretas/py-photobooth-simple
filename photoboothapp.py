@@ -75,7 +75,10 @@ class PhotoboothApp(App):
         self.STARTSCREEN_BACKGROUND_IMAGE = config.get_startscreen_background_image()
         self.STARTSCREEN_TEXT_COLOR = config.get_startscreen_text_color()
         self.STARTSCREEN_SHOW_TITLE = config.get_startscreen_show_title()
+        self.STARTSCREEN_TITLE = config.get_startscreen_title()
         self.STARTSCREEN_SHOW_INSTRUCTIONS = config.get_startscreen_show_instructions()
+        self.STARTSCREEN_INSTRUCTIONS = config.get_startscreen_instructions()
+
         self.FILTERS = config.get_filters()
         self.PREVIEW_BLUR_REFRESH_FRAMES = config.get_preview_blur_refresh_frames()
         self.BLUR_CAMERA = config.get_blur_camera()
@@ -894,7 +897,40 @@ class PhotoboothApp(App):
         Logger.info('PhotoboothApp: removed saved gallery session %s', session_id)
         return True
 
+    def delete_gallery_strip(self, strip_path):
+        """Safely delete a single gallery strip file after path validation."""
+        if not strip_path:
+            raise ValueError("No strip path provided")
+
+        strips_dir = Path(getattr(self, 'gallery_strips_directory', os.path.join(self.DCIM_DIRECTORY, 'gallery', 'strips'))).resolve()
+        target = Path(strip_path).resolve()
+
+        # Security: target must be inside strips_dir and cannot be strips_dir itself
+        try:
+            target.relative_to(strips_dir)
+        except ValueError:
+            raise ValueError(f"Path outside allowed gallery directory: {strip_path}")
+
+        if target == strips_dir:
+            raise ValueError(f"Cannot delete gallery directory: {strip_path}")
+
+        if not target.is_file():
+            raise FileNotFoundError(f"File not found or is a directory: {strip_path}")
+
+        if target.suffix.lower() != '.jpg':
+            raise ValueError(f"Invalid file type for gallery image: {strip_path}")
+
+        FileUtils.remove_file(str(target))
+
+        if getattr(self, 'last_saved_strip_path', None) == str(target):
+            self.last_saved_strip_path = None
+            self.last_saved_session_id = None
+
+        Logger.info('PhotoboothApp: successfully deleted gallery strip: %s', target)
+        return True
+
     def trigger_reprint(self, file_path, copies=1):
+
         Logger.info('PhotoboothApp: trigger_reprint file=%s copies=%s', file_path, copies)
         if not self.has_printer():
             raise PrinterStatusError(self.get_printer_status().get('reasons'))

@@ -30,7 +30,10 @@ class WebServer:
     START_SCREEN_BACKGROUND_EXTENSIONS = ('.jpg', '.jpeg', '.png')
     START_SCREEN_TEXT_COLOR_DEFAULT = '#FFFFFF'
     START_SCREEN_SHOW_TITLE_DEFAULT = True
+    START_SCREEN_TITLE_DEFAULT = ''
     START_SCREEN_SHOW_INSTRUCTIONS_DEFAULT = True
+    START_SCREEN_INSTRUCTIONS_DEFAULT = ''
+
     DSLR_SHUTTERSPEED_CHOICES = [
         ('', 'As defined on DSLR'),
         ('1/30', '1/30'),
@@ -113,9 +116,12 @@ class WebServer:
             'fields': (
                 {'section': 'StartScreen', 'option': 'TEXT_COLOR', 'label': 'Text color', 'control': 'text', 'default': START_SCREEN_TEXT_COLOR_DEFAULT, 'placeholder': '#FFFFFF', 'help': 'Hex color for the title, touch icon and version text.'},
                 {'section': 'StartScreen', 'option': 'SHOW_TITLE', 'label': 'Show title', 'control': 'checkbox', 'default': START_SCREEN_SHOW_TITLE_DEFAULT, 'help': 'Display the PHOTO BOOTH title on the waiting screen.'},
+                {'section': 'StartScreen', 'option': 'TITLE', 'label': 'Home Screen Title', 'control': 'text', 'default': START_SCREEN_TITLE_DEFAULT, 'placeholder': 'PHOTO BOOTH', 'help': 'Custom title text displayed on the start screen.'},
                 {'section': 'StartScreen', 'option': 'SHOW_INSTRUCTIONS', 'label': 'Show instructions', 'control': 'checkbox', 'default': START_SCREEN_SHOW_INSTRUCTIONS_DEFAULT, 'help': 'Display the TAP TO START instruction on the waiting screen.'},
+                {'section': 'StartScreen', 'option': 'INSTRUCTIONS', 'label': 'Home Screen Instructions', 'control': 'textarea', 'default': START_SCREEN_INSTRUCTIONS_DEFAULT, 'placeholder': 'TAP TO START', 'help': 'Custom instructions text displayed on the start screen. Supports line breaks.'},
             ),
         },
+
         {
             'title': 'Camera',
             'description': 'Select video capture device for preview and capture.',
@@ -654,7 +660,11 @@ class WebServer:
                 return normalized
             return field_spec.get('default', 'contain')
 
+        if field_spec['option'] == 'INSTRUCTIONS':
+            return value.replace('\\n', '\n')
+
         return value
+
 
     def _build_select_choices(self, field_spec, current_value):
         if field_spec.get('option') == 'CAMERA':
@@ -745,19 +755,27 @@ class WebServer:
 
         show_title = bool(get_value('StartScreen', 'SHOW_TITLE'))
         show_instructions = bool(get_value('StartScreen', 'SHOW_INSTRUCTIONS'))
+        custom_title = get_value('StartScreen', 'TITLE')
+        custom_instructions = get_value('StartScreen', 'INSTRUCTIONS')
+
+        title_text = custom_title.strip() if custom_title and custom_title.strip() else 'PHOTO BOOTH'
+        instructions_text = custom_instructions.replace('\\n', '\n').strip() if custom_instructions and custom_instructions.strip() else 'TAP TO START'
 
         return {
             'image_url': '/api/admin/startscreen-preview-image',
             'default_image_url': '/api/admin/startscreen-preview-image?default=1',
             'has_custom_background': has_custom_background,
             'custom_background_path': configured_background_path if has_custom_background else '',
-            'text': 'PHOTO BOOTH',
-            'instructions_text': 'TAP TO START',
+            'text': title_text,
+            'instructions_text': instructions_text,
+            'default_text': 'PHOTO BOOTH',
+            'default_instructions_text': 'TAP TO START',
             'text_color': text_color,
             'show_title': show_title,
             'show_instructions': show_instructions,
             'version_text': 'Version 1.2',
         }
+
 
     def _get_config_form_sections(self, form_values=None):
         parser = self._load_config_parser()
@@ -817,8 +835,16 @@ class WebServer:
                 raise ValueError('Text color must be a 6-digit hex value such as #FFFFFF.')
             return f'#{value.lstrip("#").upper()}'
 
+        if option == 'TITLE':
+            return ' '.join(value.splitlines()).strip()
+
+        if option == 'INSTRUCTIONS':
+            normalized = value.replace('\r\n', '\n').replace('\r', '\n')
+            return normalized.replace('\n', '\\n')
+
         if option == 'CALIBRATION':
             return value or 'None'
+
 
         if option == 'CAMERA':
             return value or 'auto'

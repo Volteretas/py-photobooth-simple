@@ -134,5 +134,10 @@
   "diagnostic.printer_reason_unavailable": "Imprimante indisponible",
   "gallery.title": "GALERIE",
   "gallery.empty": "Aucune photo dans la galerie pour le moment.",
-  "gallery.reprint": "RÉIMPRIMER"
+  "gallery.reprint": "RÉIMPRIMER",
+  "gallery.delete": "SUPPRIMER",
+  "gallery.delete_confirm_title": "SUPPRIMER LA PHOTO",
+  "gallery.delete_confirm_message": "Voulez-vous vraiment supprimer cette photo ?",
+  "gallery.delete_error": "Impossible de supprimer la photo.",
+  "common.cancel": "Annuler"
 }

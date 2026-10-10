@@ -134,5 +134,10 @@
   "diagnostic.printer_reason_unavailable": "Printer unavailable",
   "gallery.title": "GALLERY",
   "gallery.empty": "No photos in the gallery yet.",
-  "gallery.reprint": "REPRINT"
+  "gallery.reprint": "REPRINT",
+  "gallery.delete": "DELETE",
+  "gallery.delete_confirm_title": "DELETE PHOTO",
+  "gallery.delete_confirm_message": "Are you sure you want to delete this photo?",
+  "gallery.delete_error": "Could not delete the photo.",
+  "common.cancel": "Cancel"
 }

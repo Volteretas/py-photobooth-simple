@@ -376,7 +376,18 @@
             letter-spacing: 0.06em;
             text-align: center;
             text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+            white-space: pre-line;
+            max-width: 90%;
         }
+
+        textarea.field-input {
+            min-height: 80px;
+            padding: 10px 14px;
+            resize: vertical;
+            line-height: 1.5;
+            font-family: inherit;
+        }
+
 
         .image-upload-row {
             display: flex;
@@ -729,8 +740,8 @@
                                             alt="Start screen preview"
                                         >
                                         <div class="startscreen-preview-version" id="startscreen-preview-version">{{ start_screen_preview.version_text }}</div>
-                                        <div class="startscreen-preview-title" id="startscreen-preview-title" {% if not start_screen_preview.show_title %}hidden{% endif %}>{{ start_screen_preview.text }}</div>
-                                        <div class="startscreen-preview-instructions" id="startscreen-preview-instructions" {% if not start_screen_preview.show_instructions %}hidden{% endif %}>{{ start_screen_preview.instructions_text }}</div>
+                                        <div class="startscreen-preview-title" id="startscreen-preview-title" data-default-text="{{ start_screen_preview.default_text }}" {% if not start_screen_preview.show_title %}hidden{% endif %}>{{ start_screen_preview.text }}</div>
+                                        <div class="startscreen-preview-instructions" id="startscreen-preview-instructions" data-default-text="{{ start_screen_preview.default_instructions_text }}" {% if not start_screen_preview.show_instructions %}hidden{% endif %}>{{ start_screen_preview.instructions_text }}</div>
                                     </div>
                                     <p class="field-help">Prévisualisation approximative du rendu de l'écran d'accueil avec la couleur et la position du texte.</p>
                                 </div>
@@ -739,7 +750,7 @@
                                     {% for field in section.fields %}
                                     {% if not field.inline_with_previous %}
                                     {% set inline_next = section.fields[loop.index0 + 1] if field.inline_with_next and (loop.index0 + 1) < section.fields|length else none %}
-                                    <div class="config-field {% if field.control == 'checkbox' or field.option == 'CALIBRATION' %}full-width{% endif %}{% if inline_next %} inline-pair{% endif %}">
+                                    <div class="config-field {% if field.control == 'checkbox' or field.option == 'CALIBRATION' or field.control == 'textarea' or field.option in ('TITLE', 'INSTRUCTIONS') %}full-width{% endif %}{% if inline_next %} inline-pair{% endif %}">
                                         {% if field.control == 'checkbox' %}
                                         <label class="checkbox-field" for="{{ field.id }}">
                                             <input id="{{ field.id }}" name="{{ field.name }}" type="checkbox" value="true" {% if field.checked %}checked{% endif %} {% if not admin_enabled %}disabled{% endif %}>
@@ -778,6 +789,15 @@
                                             <option value="{{ choice_value }}" {% if choice_value == field.value %}selected{% endif %}>{{ choice_label }}</option>
                                             {% endfor %}
                                         </select>
+                                        {% elif field.control == 'textarea' %}
+                                        <textarea
+                                            class="field-input"
+                                            id="{{ field.id }}"
+                                            name="{{ field.name }}"
+                                            rows="3"
+                                            {% if field.placeholder %}placeholder="{{ field.placeholder }}"{% endif %}
+                                            {% if not admin_enabled %}disabled{% endif %}
+                                        >{{ field.value }}</textarea>
                                         {% else %}
                                         <input
                                             class="field-input"
@@ -792,6 +812,7 @@
                                             {% if not admin_enabled %}disabled{% endif %}
                                         >
                                         {% endif %}
+
                                         {% if field.help %}
                                         <p class="field-help">{{ field.help }}</p>
                                         {% endif %}
@@ -972,11 +993,15 @@
             const textColorInput = document.getElementById('startscreen__text_color');
             const showTitleInput = document.getElementById('startscreen__show_title');
             const showInstructionsInput = document.getElementById('startscreen__show_instructions');
+            const titleInput = document.getElementById('startscreen__title');
+            const instructionsInput = document.getElementById('startscreen__instructions');
             const uploadInput = document.getElementById('startscreen-background-upload');
             const removeButton = document.getElementById('startscreen-background-remove');
             const removeFlagInput = document.getElementById('startscreen-background-remove-flag');
             const defaultImageSrc = previewImage.dataset.defaultSrc;
             const currentImageSrc = previewImage.getAttribute('src');
+            const defaultTitleText = previewTitle ? (previewTitle.dataset.defaultText || 'PHOTO BOOTH') : 'PHOTO BOOTH';
+            const defaultInstructionsText = previewInstructions ? (previewInstructions.dataset.defaultText || 'TAP TO START') : 'TAP TO START';
 
             function clearObjectUrl() {
                 if (previewImage.dataset.objectUrl) {
@@ -994,9 +1019,13 @@
                 preview.style.setProperty('--preview-text-color', normalizeColor(textColorInput ? textColorInput.value : ''));
                 if (previewTitle) {
                     previewTitle.hidden = !(showTitleInput && showTitleInput.checked);
+                    const customTitle = titleInput ? titleInput.value.trim() : '';
+                    previewTitle.textContent = customTitle || defaultTitleText;
                 }
                 if (previewInstructions) {
                     previewInstructions.hidden = !(showInstructionsInput && showInstructionsInput.checked);
+                    const customInstructions = instructionsInput ? instructionsInput.value.trim() : '';
+                    previewInstructions.textContent = customInstructions || defaultInstructionsText;
                 }
             }
 
@@ -1036,6 +1065,13 @@
             if (showInstructionsInput) {
                 showInstructionsInput.addEventListener('change', refreshPreviewStyles);
             }
+            if (titleInput) {
+                titleInput.addEventListener('input', refreshPreviewStyles);
+            }
+            if (instructionsInput) {
+                instructionsInput.addEventListener('input', refreshPreviewStyles);
+            }
+
             if (uploadInput) {
                 uploadInput.addEventListener('change', function () {
                     if (removeFlagInput) {

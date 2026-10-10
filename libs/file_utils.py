@@ -253,7 +253,7 @@ class FileUtils:
     @staticmethod
     def extract_blurred_region(image, screen_size, region, blur_kernel_size=51):
         """
-        Stretch the source image to the screen size, then crop and blur one region.
+        Scale the source image in cover mode to the screen size, then crop and blur one region.
 
         `region` uses Kivy coordinates: (x, y, width, height) with y starting at the bottom.
         """
@@ -266,14 +266,32 @@ class FileUtils:
         target_width = max(1, width)
         target_height = max(1, height)
 
-        stretched = cv2.resize(image, (screen_width, screen_height), interpolation=cv2.INTER_LINEAR)
+        img_h, img_w = image.shape[:2]
+        if img_h <= 0 or img_w <= 0:
+            return None
 
-        left = max(0, min(screen_width, x))
-        right = max(left + 1, min(screen_width, x + width))
-        top = max(0, min(screen_height, screen_height - (y + height)))
-        bottom = max(top + 1, min(screen_height, screen_height - y))
+        img_ratio = img_w / img_h
+        screen_ratio = screen_width / screen_height
 
-        region_image = stretched[top:bottom, left:right]
+        if screen_ratio > img_ratio:
+            scaled_w = screen_width
+            scaled_h = max(1, int(round((screen_width * img_h) / img_w)))
+            offset_x = 0
+            offset_y = (scaled_h - screen_height) // 2
+        else:
+            scaled_h = screen_height
+            scaled_w = max(1, int(round((screen_height * img_w) / img_h)))
+            offset_x = (scaled_w - screen_width) // 2
+            offset_y = 0
+
+        scaled = cv2.resize(image, (scaled_w, scaled_h), interpolation=cv2.INTER_LINEAR)
+
+        left = max(0, min(scaled_w, offset_x + x))
+        right = max(left + 1, min(scaled_w, offset_x + x + width))
+        top = max(0, min(scaled_h, scaled_h - (offset_y + y + height)))
+        bottom = max(top + 1, min(scaled_h, scaled_h - (offset_y + y)))
+
+        region_image = scaled[top:bottom, left:right]
         if region_image.size == 0:
             return None
 

@@ -8,7 +8,10 @@ CONFIG_PATH = PROJECT_ROOT / 'config.ini'
 DEFAULT_STARTSCREEN_BACKGROUND_IMAGE = Path('./assets/backgrounds/bg_start.jpeg')
 DEFAULT_STARTSCREEN_TEXT_COLOR = '#FFFFFF'
 DEFAULT_STARTSCREEN_SHOW_TITLE = True
+DEFAULT_STARTSCREEN_TITLE = ''
 DEFAULT_STARTSCREEN_SHOW_INSTRUCTIONS = True
+DEFAULT_STARTSCREEN_INSTRUCTIONS = ''
+
 
 class Config:
     def __init__(self):
@@ -88,8 +91,19 @@ class Config:
     def get_startscreen_show_title(self):
         return self._get_boolean(('StartScreen',), 'SHOW_TITLE', fallback=DEFAULT_STARTSCREEN_SHOW_TITLE)
 
+    def get_startscreen_title(self):
+        title = self._get_string(('StartScreen',), 'TITLE', fallback=DEFAULT_STARTSCREEN_TITLE)
+        return title.strip()
+
     def get_startscreen_show_instructions(self):
         return self._get_boolean(('StartScreen',), 'SHOW_INSTRUCTIONS', fallback=DEFAULT_STARTSCREEN_SHOW_INSTRUCTIONS)
+
+    def get_startscreen_instructions(self):
+        instructions = self._get_string(('StartScreen',), 'INSTRUCTIONS', fallback=DEFAULT_STARTSCREEN_INSTRUCTIONS)
+        if instructions:
+            instructions = instructions.replace('\\n', '\n')
+        return instructions.strip()
+
 
     def get_web_port(self):
         return 5000

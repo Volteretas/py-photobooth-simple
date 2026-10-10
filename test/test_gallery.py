@@ -25,9 +25,12 @@ from libs.screens import (
     ReviewScreen,
     CountdownScreen,
     PrintStatusPopup,
+    DeleteConfirmPopup,
+    DeleteErrorPopup,
     ICON_GALLERY,
     ICON_ADMIN,
     ICON_TEMPLATE,
+    ICON_DELETE,
 )
 from photoboothapp import PhotoboothApp
 
@@ -376,9 +379,12 @@ class TestGalleryFeature(unittest.TestCase):
         self.assertTrue(hasattr(start_screen, 'btn_gallery'), "StartScreen must have btn_gallery")
         self.assertEqual(start_screen.btn_gallery.children[0].text, ICON_GALLERY)
 
-        # Verify button cluster layout: [ Template ] [ Admin ] [ Gallery ]
-        self.assertGreater(start_screen.btn_admin.x, start_screen.btn_change_template.x)
-        self.assertGreater(start_screen.btn_gallery.x, start_screen.btn_admin.x)
+        # Verify button cluster layout:
+        # Left cluster: [ Template ] [ Gallery ]
+        # Right cluster: [ Fullscreen ] [ Admin ] [ Close ]
+        self.assertGreater(start_screen.btn_gallery.x, start_screen.btn_change_template.x)
+        self.assertGreater(start_screen.btn_admin.x, start_screen.btn_fullscreen.x)
+        self.assertGreater(start_screen.btn_close.x, start_screen.btn_admin.x)
 
         # Trigger gallery button
         start_screen.on_gallery(None)
@@ -505,6 +511,178 @@ class TestGalleryFeature(unittest.TestCase):
         detail_screen.on_reprint(None)
         self.assertIsNotNone(detail_screen.print_popup)
         self.assertEqual(detail_screen.print_popup.file_path, expected_path)
+
+    def test_17_delete_button_layout_and_states(self):
+        """17. Delete button exists, is positioned next to print button, and updates state."""
+        detail_screen = GalleryDetailScreen(self.app)
+        self.assertIsNotNone(detail_screen.btn_delete)
+        self.assertEqual(detail_screen.btn_delete.icon_widget.text, ICON_DELETE)
+
+        # Initially no image -> disabled with 0.5 opacity
+        detail_screen.on_entry({})
+        self.assertTrue(detail_screen.btn_delete.disabled)
+        self.assertEqual(detail_screen.btn_delete.opacity, 0.5)
+
+        # When image present -> enabled with 1.0 opacity
+        ts = '2026-10-04_18-00-00_001'
+        img_path = os.path.join(self.app.gallery_strips_directory, f'{ts}.jpg')
+        create_dummy_image(img_path)
+        detail_screen.on_entry({'session_id': ts})
+
+        self.assertFalse(detail_screen.btn_delete.disabled)
+        self.assertEqual(detail_screen.btn_delete.opacity, 1.0)
+
+        # Layout: btn_delete is placed to the left of btn_print
+        detail_screen.layout.size = (1920, 1080)
+        detail_screen.layout.do_layout()
+        detail_screen._update_buttons_pos()
+        self.assertLess(detail_screen.btn_delete.x, detail_screen.btn_print.x)
+
+    def test_18_delete_confirmation_popup_cancel(self):
+        """18. Clicking delete opens confirm popup; canceling preserves file and selection."""
+        ts = '2026-10-04_18-00-00_002'
+        img_path = os.path.join(self.app.gallery_strips_directory, f'{ts}.jpg')
+        create_dummy_image(img_path)
+
+        detail_screen = GalleryDetailScreen(self.app)
+        detail_screen.on_entry({'session_id': ts})
+        self.assertIsNone(detail_screen.delete_popup)
+
+        # Open delete popup
+        detail_screen.on_delete_strip(None)
+        popup = detail_screen.delete_popup
+        self.assertIsNotNone(popup)
+        self.assertIsInstance(popup, DeleteConfirmPopup)
+        self.assertTrue(detail_screen.btn_delete.disabled)
+        self.assertGreater(popup.card.width, 400)
+        self.assertGreater(popup.card.height, 250)
+
+        # Cancel deletion
+        popup._on_cancel(None)
+        self.assertIsNone(detail_screen.delete_popup)
+        self.assertTrue(os.path.exists(img_path))
+        self.assertEqual(detail_screen._strip_path, img_path)
+        self.assertFalse(detail_screen.btn_delete.disabled)
+
+    def test_19_delete_confirmation_popup_confirm_with_multiple_images(self):
+        """19. Confirming delete removes only the selected strip and safely advances index."""
+        timestamps = [
+            '2026-10-04_18-00-00_003',
+            '2026-10-04_17-00-00_004',
+            '2026-10-04_16-00-00_005',
+        ]
+        for ts in timestamps:
+            create_dummy_image(os.path.join(self.app.gallery_strips_directory, f'{ts}.jpg'), 200, 600)
+            create_dummy_image(os.path.join(self.app.gallery_small_strips_directory, f'{ts}_small.jpg'), 100, 300)
+            create_dummy_image(os.path.join(self.app.gallery_photos_directory, f'{ts}_01.jpg'), 400, 300)
+
+        detail_screen = GalleryDetailScreen(self.app)
+        # Enter on middle strip (index 1)
+        detail_screen.on_entry({'session_id': timestamps[1]})
+        self.assertEqual(detail_screen._current_index, 1)
+
+        middle_strip = os.path.join(self.app.gallery_strips_directory, f'{timestamps[1]}.jpg')
+
+        detail_screen.on_delete_strip(None)
+        self.assertIsNotNone(detail_screen.delete_popup)
+        detail_screen.delete_popup._on_confirm(None)
+
+        # Confirm middle strip deleted
+        self.assertFalse(os.path.exists(middle_strip))
+        # Other strips still exist
+        self.assertTrue(os.path.exists(os.path.join(self.app.gallery_strips_directory, f'{timestamps[0]}.jpg')))
+        self.assertTrue(os.path.exists(os.path.join(self.app.gallery_strips_directory, f'{timestamps[2]}.jpg')))
+        # Related photo in photos directory was not deleted
+        self.assertTrue(os.path.exists(os.path.join(self.app.gallery_photos_directory, f'{timestamps[1]}_01.jpg')))
+
+        # Safely selected the remaining strip
+        self.assertEqual(len(detail_screen._strips), 2)
+        self.assertEqual(detail_screen._current_index, 1)
+        self.assertEqual(detail_screen._strip_path, os.path.join(self.app.gallery_strips_directory, f'{timestamps[2]}.jpg'))
+
+    def test_20_delete_last_remaining_image_transitions_to_gallery(self):
+        """20. Deleting the last photo transitions back to GalleryScreen empty state."""
+        ts = '2026-10-04_19-00-00_006'
+        img_path = os.path.join(self.app.gallery_strips_directory, f'{ts}.jpg')
+        create_dummy_image(img_path)
+
+        detail_screen = GalleryDetailScreen(self.app)
+        detail_screen.on_entry({'session_id': ts})
+
+        self.app.transition_to = MagicMock()
+
+        detail_screen.on_delete_strip(None)
+        detail_screen.delete_popup._on_confirm(None)
+
+        self.assertFalse(os.path.exists(img_path))
+        self.assertEqual(len(detail_screen._strips), 0)
+        self.app.transition_to.assert_called_with(ScreenMgr.GALLERY)
+
+    def test_21_delete_error_handling(self):
+        """21. When deletion fails, error popup appears and dismisses without crash."""
+        ts = '2026-10-04_20-00-00_007'
+        img_path = os.path.join(self.app.gallery_strips_directory, f'{ts}.jpg')
+        create_dummy_image(img_path)
+
+        detail_screen = GalleryDetailScreen(self.app)
+        detail_screen.on_entry({'session_id': ts})
+
+        with patch.object(self.app, 'delete_gallery_strip', side_effect=OSError("Read-only filesystem")):
+            detail_screen.on_delete_strip(None)
+            detail_screen.delete_popup._on_confirm(None)
+
+            self.assertIsNotNone(detail_screen.error_popup)
+            self.assertIsInstance(detail_screen.error_popup, DeleteErrorPopup)
+
+            # Dismiss error popup
+            detail_screen.error_popup._on_close(None)
+            self.assertIsNone(detail_screen.error_popup)
+            # File still present and selected
+            self.assertTrue(os.path.exists(img_path))
+            self.assertEqual(detail_screen._strip_path, img_path)
+
+    def test_22_delete_gallery_strip_security_and_validation(self):
+        """22. PhotoboothApp.delete_gallery_strip validates paths and rejects invalid/traversal paths."""
+        # 1. Empty/None path
+        with self.assertRaises(ValueError):
+            self.app.delete_gallery_strip(None)
+        with self.assertRaises(ValueError):
+            self.app.delete_gallery_strip("")
+
+        # 2. Path outside gallery strips directory
+        outside_file = os.path.join(self.temp_dir.name, 'outside.jpg')
+        create_dummy_image(outside_file)
+        with self.assertRaises(ValueError):
+            self.app.delete_gallery_strip(outside_file)
+
+        # 3. Path traversal attack
+        traversal = os.path.join(self.app.gallery_strips_directory, '..', '..', 'outside.jpg')
+        with self.assertRaises(ValueError):
+            self.app.delete_gallery_strip(traversal)
+
+        # 4. Trying to delete directory itself
+        with self.assertRaises(ValueError):
+            self.app.delete_gallery_strip(self.app.gallery_strips_directory)
+
+        # 5. Non-existent file
+        non_existent = os.path.join(self.app.gallery_strips_directory, 'ghost.jpg')
+        with self.assertRaises(FileNotFoundError):
+            self.app.delete_gallery_strip(non_existent)
+
+        # 6. Invalid extension
+        invalid_ext = os.path.join(self.app.gallery_strips_directory, 'test.txt')
+        with open(invalid_ext, 'w') as f:
+            f.write('not an image')
+        with self.assertRaises(ValueError):
+            self.app.delete_gallery_strip(invalid_ext)
+
+        # 7. Valid strip deletion
+        valid_strip = os.path.join(self.app.gallery_strips_directory, 'valid.jpg')
+        create_dummy_image(valid_strip)
+        self.assertTrue(os.path.exists(valid_strip))
+        result = self.app.delete_gallery_strip(valid_strip)
+        self.assertTrue(result)
+        self.assertFalse(os.path.exists(valid_strip))
 
 
 if __name__ == '__main__':

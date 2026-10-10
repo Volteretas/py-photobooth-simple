@@ -35,6 +35,8 @@ def LARGE_FONT():  return min(Window.size) * 0.07
 def NORMAL_FONT(): return min(Window.size) * 0.055
 def SMALL_FONT():  return min(Window.size) * 0.035
 def TINY_FONT():   return min(Window.size) * 0.018
+def POPUP_TITLE_FONT(): return max(dp(16), min(Window.size) * 0.032)
+def POPUP_MSG_FONT():   return max(dp(13), min(Window.size) * 0.022)
 
 # Registry of (weakref, attr, fraction_fn) updated on every Window resize.
 # Call wh_bind(widget, 'font_size', LARGE_FONT) after creating a widget to keep it live.
@@ -139,6 +141,8 @@ ICON_THUMB_UP = '\u4905'
 ICON_THUMB_DOWN = '\u4901'
 ICON_FULLSCREEN = '\u433e'
 ICON_WINDOWED = '\u43a4'
+ICON_DELETE = '\u3ef9'
+
 
 
 def _escape_kivy_markup(value):
@@ -205,15 +209,52 @@ class BackgroundScreen(Screen):
         super(BackgroundScreen, self).__init__(**kwargs)
         with self.canvas.before:
             self.background_image = Rectangle(pos=self.pos, size=self.size, source=bg)
+        self.bind(pos=self._update_background, size=self._update_background)
+        Window.bind(size=self._update_background)
+        self._update_background()
+
+    def _update_background(self, *args):
+        if not hasattr(self, 'background_image'):
+            return
+
+        tex = getattr(self.background_image, 'texture', None)
+        tw, th = (tex.size if tex else (0, 0))
+
+        if tw <= 0 or th <= 0:
+            self.background_image.pos = self.pos
+            self.background_image.size = self.size
+            return
+
+        w, h = self.size
+        if w <= 0 or h <= 0:
+            return
+
+        img_ratio = tw / th
+        screen_ratio = w / h
+
+        if screen_ratio > img_ratio:
+            new_w = w
+            new_h = (w * th) / tw
+        else:
+            new_h = h
+            new_w = (h * tw) / th
+
+        self.background_image.size = (new_w, new_h)
+        self.background_image.pos = (
+            self.x + (w - new_w) / 2.0,
+            self.y + (h - new_h) / 2.0,
+        )
 
     def on_pos(self, *args):
-        self.background_image.pos = self.pos
+        self._update_background(*args)
 
     def on_size(self, *args):
-        self.background_image.size = self.size
+        self._update_background(*args)
 
     def on_update(self, kwargs={}):
-        pass
+        if 'bg' in kwargs:
+            self.background_image.source = kwargs['bg']
+            self._update_background()
 
 class ColorScreen(Screen):
     def __init__(self, **kwargs):
@@ -317,8 +358,14 @@ class StartScreen(BackgroundScreen):
                 pos_hint=title_pos_hint,
             ))
 
+        custom_title = getattr(app, 'STARTSCREEN_TITLE', None)
+        title_text = custom_title.strip() if isinstance(custom_title, str) and custom_title.strip() else app.t('start.title')
+
+        custom_instructions = getattr(app, 'STARTSCREEN_INSTRUCTIONS', None)
+        instructions_text = custom_instructions.strip() if isinstance(custom_instructions, str) and custom_instructions.strip() else app.t('start.tap_to_start')
+
         start = BreezyBorderedLabel(
-            text=app.t('start.title'),
+            text=title_text,
             color=label_color,
             border_color=label_color,
             border_width=Window.height * 0.006,
@@ -332,20 +379,23 @@ class StartScreen(BackgroundScreen):
         self.start_label = start
 
         # Instructions
+        lines_count = max(1, len(instructions_text.splitlines()))
+        inst_height_hint = min(0.22, max(0.1, 0.06 * lines_count + 0.04))
         instructions = PulsingLabel(
-            text=app.t('start.tap_to_start'),
+            text=instructions_text,
             color=label_color,
             font_size=NORMAL_FONT(),
             halign='center',
             valign='middle',
-            size_hint=(1.0, 0.1),
-            pos_hint={'x': 0, 'y': 0.05},
+            size_hint=(1.0, inst_height_hint),
+            pos_hint={'center_x': 0.5, 'center_y': 0.1},
             opacity=1 if app.STARTSCREEN_SHOW_INSTRUCTIONS else 0,
         )
         instructions.bind(size=instructions.setter('text_size'))
         overlay_layout.add_widget(instructions)
         self.instructions_label = instructions
         wh_bind(self.instructions_label, 'font_size', NORMAL_FONT)
+
 
         # Version
         version = Label(
@@ -431,8 +481,10 @@ class StartScreen(BackgroundScreen):
         )
         self.add_widget(self.btn_gallery)
 
+        self.size = Window.size
+        self.do_layout()
         self.btn_change_template.bind(pos=self._update_buttons_pos, size=self._update_buttons_pos)
-        self.btn_admin.bind(pos=self._update_buttons_pos, size=self._update_buttons_pos)
+        self.btn_gallery.bind(pos=self._update_buttons_pos, size=self._update_buttons_pos)
         self.btn_close.bind(pos=self._update_buttons_pos, size=self._update_buttons_pos)
         Window.bind(size=self._update_buttons_pos)
         Window.bind(fullscreen=self._update_fullscreen_icon)
@@ -441,13 +493,13 @@ class StartScreen(BackgroundScreen):
     def _update_buttons_pos(self, *args):
         margin = min(Window.size) * 0.015
         if self.btn_change_template.opacity > 0:
-            self.btn_admin.x = self.btn_change_template.right + margin
+            self.btn_gallery.x = self.btn_change_template.right + margin
         else:
-            self.btn_admin.x = self.btn_change_template.x
-        self.btn_gallery.x = self.btn_admin.right + margin
+            self.btn_gallery.x = self.btn_change_template.x
 
-        if hasattr(self, 'btn_close') and hasattr(self, 'btn_fullscreen') and hasattr(self, 'diagnostic_button'):
-            self.btn_fullscreen.x = self.btn_close.x - self.btn_fullscreen.width - margin
+        if hasattr(self, 'btn_close') and hasattr(self, 'btn_admin') and hasattr(self, 'btn_fullscreen') and hasattr(self, 'diagnostic_button'):
+            self.btn_admin.x = self.btn_close.x - self.btn_admin.width - margin
+            self.btn_fullscreen.x = self.btn_admin.x - self.btn_fullscreen.width - margin
             self.diagnostic_button.x = self.btn_fullscreen.x - self.diagnostic_button.width - margin
 
     def _update_admin_button_pos(self, *args):
@@ -483,7 +535,7 @@ class StartScreen(BackgroundScreen):
 
     def on_entry(self, kwargs={}):
         Logger.info('StartScreen: on_entry().')
-        if len(self.app.print_formats) > 1:
+        if len(self.app.print_formats) >= 1:
             self.btn_change_template.opacity = 1
             self.btn_change_template.disabled = False
         else:
@@ -4030,14 +4082,276 @@ class GalleryScreen(ColorScreen):
         self.app.transition_to(ScreenMgr.START)
 
 
+class DeleteConfirmPopup(FloatLayout):
+    """Modal confirmation popup before deleting a gallery photo."""
+
+    def __init__(self, app, on_confirm=None, on_cancel=None, **kwargs):
+        super(DeleteConfirmPopup, self).__init__(**kwargs)
+        self.app = app
+        self.on_confirm = on_confirm
+        self.on_cancel = on_cancel
+
+        # Semi-transparent dark overlay
+        with self.canvas.before:
+            Color(0, 0, 0, 0.75)
+            self.bg_rect = Rectangle(pos=self.pos, size=self.size)
+        self.bind(pos=self._update_bg, size=self._update_bg)
+
+        # Centered card
+        self.card = BoxLayout(
+            orientation='vertical',
+            size_hint=(None, None),
+            pos_hint={'center_x': 0.5, 'center_y': 0.5},
+        )
+        with self.card.canvas.before:
+            Color(0.14, 0.17, 0.21, 0.96)
+            self.card_rect = RoundedRectangle(pos=self.card.pos, size=self.card.size, radius=[dp(16)])
+        self.card.bind(pos=self._update_card_rect, size=self._update_card_rect)
+
+        # Title
+        title_text = self.app.t('gallery.delete_confirm_title', default='DELETE PHOTO')
+        self.title_label = Label(
+            text=title_text,
+            size_hint=(1, 0.24),
+            font_name=MONTSERRAT_SEMIBOLD_TTF,
+            font_size=POPUP_TITLE_FONT(),
+            color=(1, 1, 1, 1),
+            halign='center',
+            valign='middle',
+        )
+        wh_bind(self.title_label, 'font_size', POPUP_TITLE_FONT)
+        self.title_label.bind(size=self.title_label.setter('text_size'))
+        self.card.add_widget(self.title_label)
+
+        # Message
+        msg_text = self.app.t('gallery.delete_confirm_message', default='Are you sure you want to delete this photo?')
+        self.msg_label = Label(
+            text=msg_text,
+            size_hint=(1, 0.40),
+            font_name=MONTSERRAT_SEMIBOLD_TTF,
+            font_size=POPUP_MSG_FONT(),
+            color=(0.90, 0.90, 0.90, 1),
+            halign='center',
+            valign='middle',
+        )
+        wh_bind(self.msg_label, 'font_size', POPUP_MSG_FONT)
+        self.msg_label.bind(size=self.msg_label.setter('text_size'))
+        self.card.add_widget(self.msg_label)
+
+        # Button container with Cancel and Confirm
+        btn_box = BoxLayout(
+            orientation='horizontal',
+            size_hint=(1, 0.36),
+            spacing=dp(24),
+        )
+
+        cancel_anchor = AnchorLayout(anchor_x='center', anchor_y='center', size_hint=(0.5, 1))
+        self.btn_cancel = make_icon_button(
+            ICON_CANCEL,
+            size=0.075,
+            font=ICON_TTF,
+            font_size_fraction=0.035,
+            bgcolor=HOME_COLOR,
+            on_release=self._on_cancel,
+        )
+        cancel_anchor.add_widget(self.btn_cancel)
+        btn_box.add_widget(cancel_anchor)
+
+        confirm_anchor = AnchorLayout(anchor_x='center', anchor_y='center', size_hint=(0.5, 1))
+        self.btn_confirm = make_icon_button(
+            ICON_CONFIRM,
+            size=0.075,
+            font=ICON_TTF,
+            font_size_fraction=0.035,
+            bgcolor=CANCEL_COLOR,
+            on_release=self._on_confirm,
+        )
+        confirm_anchor.add_widget(self.btn_confirm)
+        btn_box.add_widget(confirm_anchor)
+
+        self.card.add_widget(btn_box)
+        self.add_widget(self.card)
+
+        self._update_card_size()
+        Window.bind(size=self._update_card_size)
+
+    def _update_card_size(self, *args):
+        s = min(Window.size)
+        if Window.width >= Window.height:
+            card_w = min(Window.width * 0.70, max(dp(460), s * 0.65))
+            card_h = min(Window.height * 0.55, max(dp(270), s * 0.40))
+        else:
+            card_w = min(Window.width * 0.88, max(dp(340), s * 0.80))
+            card_h = min(Window.height * 0.45, max(dp(270), s * 0.38))
+        self.card.size = (card_w, card_h)
+        pad = max(dp(16), s * 0.025)
+        self.card.padding = [pad, pad, pad, pad]
+        self.card.spacing = max(dp(10), s * 0.015)
+
+    def _update_bg(self, *args):
+        self.bg_rect.pos = self.pos
+        self.bg_rect.size = self.size
+
+    def _update_card_rect(self, instance, *args):
+        self.card_rect.pos = instance.pos
+        self.card_rect.size = instance.size
+        self.card_rect.radius = [max(dp(12), min(Window.size) * 0.018)]
+
+    def cleanup(self):
+        try:
+            Window.unbind(size=self._update_card_size)
+        except Exception:
+            pass
+
+    def on_touch_down(self, touch):
+        if self.card.collide_point(*touch.pos):
+            return super(DeleteConfirmPopup, self).on_touch_down(touch)
+        return True
+
+    def on_touch_move(self, touch):
+        return True
+
+    def on_touch_up(self, touch):
+        if self.card.collide_point(*touch.pos):
+            return super(DeleteConfirmPopup, self).on_touch_up(touch)
+        return True
+
+    def _on_cancel(self, obj):
+        if obj is not None and getattr(obj, 'last_touch', None) is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
+        if callable(self.on_cancel):
+            self.on_cancel()
+
+    def _on_confirm(self, obj):
+        if obj is not None and getattr(obj, 'last_touch', None) is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
+        if callable(self.on_confirm):
+            self.on_confirm()
+
+
+class DeleteErrorPopup(FloatLayout):
+    """Modal popup displaying an error when photo deletion fails."""
+
+    def __init__(self, app, message=None, on_dismiss=None, **kwargs):
+        super(DeleteErrorPopup, self).__init__(**kwargs)
+        self.app = app
+        self.on_dismiss = on_dismiss
+
+        # Semi-transparent dark overlay
+        with self.canvas.before:
+            Color(0, 0, 0, 0.75)
+            self.bg_rect = Rectangle(pos=self.pos, size=self.size)
+        self.bind(pos=self._update_bg, size=self._update_bg)
+
+        # Centered card
+        self.card = BoxLayout(
+            orientation='vertical',
+            size_hint=(None, None),
+            pos_hint={'center_x': 0.5, 'center_y': 0.5},
+        )
+        with self.card.canvas.before:
+            Color(0.14, 0.17, 0.21, 0.96)
+            self.card_rect = RoundedRectangle(pos=self.card.pos, size=self.card.size, radius=[dp(16)])
+        self.card.bind(pos=self._update_card_rect, size=self._update_card_rect)
+
+        # Error Icon
+        self.icon_label = ResizeLabel(
+            text=ICON_ERROR,
+            font_name=ICON_TTF,
+            size_hint=(1, 0.24),
+            wh_fraction=0.045,
+            color=(1, 0.4, 0.4, 1),
+            halign='center',
+            valign='middle',
+        )
+        self.card.add_widget(self.icon_label)
+
+        # Error Message
+        err_text = message or self.app.t('gallery.delete_error', default='Could not delete the photo.')
+        self.msg_label = Label(
+            text=err_text,
+            size_hint=(1, 0.40),
+            font_name=MONTSERRAT_SEMIBOLD_TTF,
+            font_size=POPUP_MSG_FONT(),
+            color=(0.95, 0.95, 0.95, 1),
+            halign='center',
+            valign='middle',
+        )
+        wh_bind(self.msg_label, 'font_size', POPUP_MSG_FONT)
+        self.msg_label.bind(size=self.msg_label.setter('text_size'))
+        self.card.add_widget(self.msg_label)
+
+        # OK button
+        btn_anchor = AnchorLayout(anchor_x='center', anchor_y='center', size_hint=(1, 0.36))
+        self.btn_ok = make_icon_button(
+            ICON_CONFIRM,
+            size=0.075,
+            font=ICON_TTF,
+            font_size_fraction=0.035,
+            bgcolor=HOME_COLOR,
+            on_release=self._on_close,
+        )
+        btn_anchor.add_widget(self.btn_ok)
+        self.card.add_widget(btn_anchor)
+
+        self.add_widget(self.card)
+
+        self._update_card_size()
+        Window.bind(size=self._update_card_size)
+
+    def _update_card_size(self, *args):
+        s = min(Window.size)
+        if Window.width >= Window.height:
+            card_w = min(Window.width * 0.70, max(dp(460), s * 0.65))
+            card_h = min(Window.height * 0.55, max(dp(270), s * 0.40))
+        else:
+            card_w = min(Window.width * 0.88, max(dp(340), s * 0.80))
+            card_h = min(Window.height * 0.45, max(dp(270), s * 0.38))
+        self.card.size = (card_w, card_h)
+        pad = max(dp(16), s * 0.025)
+        self.card.padding = [pad, pad, pad, pad]
+        self.card.spacing = max(dp(10), s * 0.015)
+
+    def _update_bg(self, *args):
+        self.bg_rect.pos = self.pos
+        self.bg_rect.size = self.size
+
+    def _update_card_rect(self, instance, *args):
+        self.card_rect.pos = instance.pos
+        self.card_rect.size = instance.size
+        self.card_rect.radius = [max(dp(12), min(Window.size) * 0.018)]
+
+    def cleanup(self):
+        try:
+            Window.unbind(size=self._update_card_size)
+        except Exception:
+            pass
+
+    def on_touch_down(self, touch):
+        if self.card.collide_point(*touch.pos):
+            return super(DeleteErrorPopup, self).on_touch_down(touch)
+        return True
+
+    def on_touch_move(self, touch):
+        return True
+
+    def on_touch_up(self, touch):
+        if self.card.collide_point(*touch.pos):
+            return super(DeleteErrorPopup, self).on_touch_up(touch)
+        return True
+
+    def _on_close(self, obj):
+        if obj is not None and getattr(obj, 'last_touch', None) is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
+        if callable(self.on_dismiss):
+            self.on_dismiss()
+
+
 class GalleryDetailScreen(ColorScreen):
     """
-    +---------------------------------+
-    | [Back]   YYYY-MM-DD  HH:MM   [Print] |
-    |                                 |
-    |          [ Full Strip ]         |
-    |                                 |
-    +---------------------------------+
+    +-----------------------------------------------+
+    | [Back]   YYYY-MM-DD  HH:MM   [Delete] [Print] |
+    |                                               |
+    |                [ Full Strip ]                 |
+    |                                               |
+    +-----------------------------------------------+
     """
     def __init__(self, app, **kwargs):
         Logger.info('GalleryDetailScreen: __init__().')
@@ -4049,6 +4363,8 @@ class GalleryDetailScreen(ColorScreen):
         self._current_index = 0
         self._home_timeout_clock = None
         self.print_popup = None
+        self.delete_popup = None
+        self.error_popup = None
 
         self.layout = FloatLayout()
 
@@ -4099,6 +4415,18 @@ class GalleryDetailScreen(ColorScreen):
         )
         self.layout.add_widget(self.btn_print)
 
+        # Delete button top right, next to Reprint button
+        self.btn_delete = make_icon_button(
+            ICON_DELETE,
+            size=0.075,
+            font=ICON_TTF,
+            pos_hint={'top': 0.985},
+            font_size_fraction=0.035,
+            bgcolor=CANCEL_COLOR,
+            on_release=self.on_delete_strip,
+        )
+        self.layout.add_widget(self.btn_delete)
+
         # Previous (left arrow) button
         self.btn_prev = make_icon_button(
             ICON_PREV,
@@ -4124,6 +4452,35 @@ class GalleryDetailScreen(ColorScreen):
         self.layout.add_widget(self.btn_next)
 
         self.add_widget(self.layout)
+
+        self.btn_print.bind(pos=self._update_buttons_pos, size=self._update_buttons_pos)
+        self.btn_delete.bind(size=self._update_buttons_pos)
+        self.layout.bind(size=self._update_buttons_pos)
+        Window.bind(size=self._update_buttons_pos)
+        self._update_buttons_pos()
+
+    def _update_buttons_pos(self, *args):
+        margin = min(Window.size) * 0.015
+        if hasattr(self, 'btn_delete') and hasattr(self, 'btn_print'):
+            self.btn_delete.x = self.btn_print.x - self.btn_delete.width - margin
+
+    def _update_action_buttons(self):
+        has_strip = bool(self._strip_path and os.path.exists(self._strip_path))
+        has_printer = self.app.has_printer() if hasattr(self.app, 'has_printer') else False
+
+        if self.print_popup and self.print_popup.parent:
+            self.btn_print.disabled = True
+            self.btn_print.opacity = 0.5
+        else:
+            self.btn_print.disabled = not (has_printer and has_strip)
+            self.btn_print.opacity = 1.0 if (has_printer and has_strip) else 0.5
+
+        if self.delete_popup and self.delete_popup.parent:
+            self.btn_delete.disabled = True
+            self.btn_delete.opacity = 0.5
+        else:
+            self.btn_delete.disabled = not has_strip
+            self.btn_delete.opacity = 1.0 if has_strip else 0.5
 
     def _get_strips_list(self):
         if hasattr(self.app, 'get_screen'):
@@ -4152,6 +4509,7 @@ class GalleryDetailScreen(ColorScreen):
             self.strip_image.opacity = 0
             self.date_label.text = ''
             self._update_navigation_buttons()
+            self._update_action_buttons()
             return
 
         index = max(0, min(index, len(self._strips) - 1))
@@ -4170,6 +4528,7 @@ class GalleryDetailScreen(ColorScreen):
 
         self.date_label.text = self._format_session_date(self._session_id)
         self._update_navigation_buttons()
+        self._update_action_buttons()
 
     def _update_navigation_buttons(self):
         total = len(self._strips)
@@ -4183,7 +4542,7 @@ class GalleryDetailScreen(ColorScreen):
 
     def on_prev_strip(self, obj):
         if obj is not None and getattr(obj, 'last_touch', None) is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
-        if self.print_popup and self.print_popup.parent:
+        if (self.print_popup and self.print_popup.parent) or (self.delete_popup and self.delete_popup.parent) or (self.error_popup and self.error_popup.parent):
             return
         Logger.info('GalleryDetailScreen: on_prev_strip().')
         self._start_home_timeout()
@@ -4192,7 +4551,7 @@ class GalleryDetailScreen(ColorScreen):
 
     def on_next_strip(self, obj):
         if obj is not None and getattr(obj, 'last_touch', None) is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
-        if self.print_popup and self.print_popup.parent:
+        if (self.print_popup and self.print_popup.parent) or (self.delete_popup and self.delete_popup.parent) or (self.error_popup and self.error_popup.parent):
             return
         Logger.info('GalleryDetailScreen: on_next_strip().')
         self._start_home_timeout()
@@ -4232,10 +4591,7 @@ class GalleryDetailScreen(ColorScreen):
             self._current_index = 0
 
         self._show_strip_at_index(self._current_index)
-
-        has_printer = self.app.has_printer() if hasattr(self.app, 'has_printer') else False
-        self.btn_print.disabled = not has_printer
-        self.btn_print.opacity = 1.0 if has_printer else 0.5
+        self._update_buttons_pos()
         self._start_home_timeout()
 
     def on_exit(self, kwargs={}):
@@ -4244,6 +4600,16 @@ class GalleryDetailScreen(ColorScreen):
         if self.print_popup and self.print_popup.parent:
             self.layout.remove_widget(self.print_popup)
             self.print_popup = None
+        if self.delete_popup and self.delete_popup.parent:
+            if hasattr(self.delete_popup, 'cleanup'):
+                self.delete_popup.cleanup()
+            self.layout.remove_widget(self.delete_popup)
+            self.delete_popup = None
+        if self.error_popup and self.error_popup.parent:
+            if hasattr(self.error_popup, 'cleanup'):
+                self.error_popup.cleanup()
+            self.layout.remove_widget(self.error_popup)
+            self.error_popup = None
         # Unload high resolution image on exit to release texture memory
         self.strip_image.source = ''
 
@@ -4251,32 +4617,126 @@ class GalleryDetailScreen(ColorScreen):
         if obj is not None and getattr(obj, 'last_touch', None) is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
         Logger.info('GalleryDetailScreen: on_reprint(%s).', self._strip_path)
         self._start_home_timeout()
-        if self.print_popup and self.print_popup.parent:
+        if (self.print_popup and self.print_popup.parent) or (self.delete_popup and self.delete_popup.parent) or (self.error_popup and self.error_popup.parent):
             return
         if not self._strip_path or not os.path.exists(self._strip_path):
             Logger.warning('GalleryDetailScreen: no valid strip to reprint')
             return
 
-        self.btn_print.disabled = True
-        self.btn_print.opacity = 0.5
         self.print_popup = PrintStatusPopup(
             self.app,
             on_dismiss=self._dismiss_print_popup,
             file_path=self._strip_path,
         )
         self.layout.add_widget(self.print_popup)
+        self._update_action_buttons()
 
     def _dismiss_print_popup(self):
         if self.print_popup and self.print_popup.parent:
             self.layout.remove_widget(self.print_popup)
             self.print_popup = None
-        has_printer = self.app.has_printer() if hasattr(self.app, 'has_printer') else False
-        self.btn_print.disabled = not has_printer
-        self.btn_print.opacity = 1.0 if has_printer else 0.5
+        self._update_action_buttons()
+        self._start_home_timeout()
+
+    def on_delete_strip(self, obj):
+        if obj is not None and getattr(obj, 'last_touch', None) is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
+        if (self.print_popup and self.print_popup.parent) or (self.delete_popup and self.delete_popup.parent) or (self.error_popup and self.error_popup.parent):
+            return
+        if not self._strip_path or not os.path.exists(self._strip_path):
+            Logger.warning('GalleryDetailScreen: no valid strip to delete')
+            return
+
+        Logger.info('GalleryDetailScreen: on_delete_strip(%s).', self._strip_path)
+        self._start_home_timeout()
+        self.delete_popup = DeleteConfirmPopup(
+            self.app,
+            on_confirm=self._confirm_delete_strip,
+            on_cancel=self._dismiss_delete_popup,
+        )
+        self.layout.add_widget(self.delete_popup)
+        self._update_action_buttons()
+
+    def _dismiss_delete_popup(self):
+        if self.delete_popup and self.delete_popup.parent:
+            if hasattr(self.delete_popup, 'cleanup'):
+                self.delete_popup.cleanup()
+            self.layout.remove_widget(self.delete_popup)
+            self.delete_popup = None
+        self._update_action_buttons()
+        self._start_home_timeout()
+
+    def _confirm_delete_strip(self):
+        strip_to_delete = self._strip_path
+        self._dismiss_delete_popup()
+
+        if not strip_to_delete:
+            return
+
+        try:
+            self.app.delete_gallery_strip(strip_to_delete)
+        except Exception as exc:
+            Logger.error('GalleryDetailScreen: failed to delete strip %s: %s', strip_to_delete, exc)
+            self._show_delete_error(self.app.t('gallery.delete_error', default='Could not delete the photo.'))
+            return
+
+        # Refresh gallery overview screen if available
+        if hasattr(self.app, 'get_screen'):
+            try:
+                gallery_screen = self.app.get_screen(ScreenMgr.GALLERY)
+                if gallery_screen and hasattr(gallery_screen, '_refresh_gallery'):
+                    gallery_screen._refresh_gallery()
+            except Exception as exc:
+                Logger.warning('GalleryDetailScreen: error refreshing gallery screen: %s', exc)
+
+        # Refresh our strips list
+        self._strips = self._get_strips_list()
+
+        if not self._strips:
+            # Gallery is now empty, return to gallery screen (empty state)
+            self._show_strip_at_index(0)
+            self.app.transition_to(ScreenMgr.GALLERY)
+        else:
+            # Safely select next available strip
+            new_index = min(self._current_index, len(self._strips) - 1)
+            self._show_strip_at_index(new_index)
+            self._start_home_timeout()
+
+    def _show_delete_error(self, message=None):
+        if self.error_popup and self.error_popup.parent:
+            if hasattr(self.error_popup, 'cleanup'):
+                self.error_popup.cleanup()
+            self.layout.remove_widget(self.error_popup)
+            self.error_popup = None
+
+        self.error_popup = DeleteErrorPopup(
+            self.app,
+            message=message,
+            on_dismiss=self._dismiss_error_popup,
+        )
+        self.layout.add_widget(self.error_popup)
+        self._update_action_buttons()
+        self._start_home_timeout()
+
+    def _dismiss_error_popup(self):
+        if self.error_popup and self.error_popup.parent:
+            if hasattr(self.error_popup, 'cleanup'):
+                self.error_popup.cleanup()
+            self.layout.remove_widget(self.error_popup)
+            self.error_popup = None
+        self._update_action_buttons()
         self._start_home_timeout()
 
     def on_back(self, obj):
         if obj is not None and getattr(obj, 'last_touch', None) is not None and not isinstance(obj.last_touch, MouseMotionEvent): return
+        if self.delete_popup and self.delete_popup.parent:
+            self._dismiss_delete_popup()
+            return
+        if self.error_popup and self.error_popup.parent:
+            self._dismiss_error_popup()
+            return
+        if self.print_popup and self.print_popup.parent:
+            self._dismiss_print_popup()
+            return
         Logger.info('GalleryDetailScreen: on_back().')
         self._stop_home_timeout()
         self.app.transition_to(ScreenMgr.GALLERY)
