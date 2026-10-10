@@ -1350,21 +1350,34 @@ class ErrorScreen(ColorScreen):
 
 
 class ThumbnailSlot(AnchorLayout):
-    def __init__(self, **kwargs):
+    def __init__(self, aspect_ratio=16.0 / 9.0, fit_mode='contain', **kwargs):
         super(ThumbnailSlot, self).__init__(anchor_x='center', anchor_y='center', **kwargs)
+        self.size_hint_y = None
+        try:
+            self._aspect_ratio = float(aspect_ratio)
+            if self._aspect_ratio <= 0:
+                self._aspect_ratio = 16.0 / 9.0
+        except (TypeError, ValueError):
+            self._aspect_ratio = 16.0 / 9.0
+
         with self.canvas.before:
             Color(0, 0, 0, 0.35)
             self.bg_rect = RoundedRectangle(pos=self.pos, size=self.size, radius=[dp(8)])
             Color(BORDER_COLOR[0], BORDER_COLOR[1], BORDER_COLOR[2], 0.5)
             self.border_line = Line(rounded_rectangle=(self.x, self.y, self.width, self.height, dp(8)), width=dp(1.2))
         self.bind(pos=self._update_rect, size=self._update_rect)
+        self.bind(width=self._update_aspect_ratio)
 
+        valid_fit_mode = fit_mode if isinstance(fit_mode, str) and fit_mode in {'contain', 'cover'} else 'contain'
         self.image = Image(
             size_hint=(1, 1),
-            fit_mode='contain',
+            fit_mode=valid_fit_mode,
             opacity=0,
         )
         self.add_widget(self.image)
+
+    def _update_aspect_ratio(self, instance, width):
+        self.height = width / self._aspect_ratio
 
     def _update_rect(self, *args):
         self.bg_rect.pos = self.pos
@@ -1486,20 +1499,68 @@ class CountdownScreen(ColorScreen):
         # Photo thumbnails shown on the left side of the live preview.
         self.thumbnails_container = BoxLayout(
             orientation='vertical',
-            size_hint=(0.11, 0.52),
+            size_hint=(None, None),
             pos_hint={'x': 0.03, 'center_y': 0.46},
             spacing=dp(12),
             padding=dp(4),
         )
         self.thumbnail_slots = []
+        aspect_ratio = getattr(self.app, 'THUMBNAILS_ASPECT_RATIO', 16.0 / 9.0)
+        fit_mode = getattr(self.app, 'THUMBNAILS_IMAGE_FIT_MODE', 'contain')
         for _ in range(3):
-            slot = ThumbnailSlot()
+            slot = ThumbnailSlot(aspect_ratio=aspect_ratio, fit_mode=fit_mode)
             self.thumbnails_container.add_widget(slot)
             self.thumbnail_slots.append(slot)
 
         self.overlay_layout.add_widget(self.thumbnails_container)
+        self.overlay_layout.bind(size=self._update_thumbnails_layout)
+        Window.bind(size=self._update_thumbnails_layout)
+        self._update_thumbnails_layout()
 
         self.add_widget(self.layout)
+
+    def _update_thumbnails_layout(self, *args):
+        win_w = self.overlay_layout.width if self.overlay_layout.width > 1 else Window.width
+        win_h = self.overlay_layout.height if self.overlay_layout.height > 1 else Window.height
+        if win_w <= 0 or win_h <= 0:
+            return
+
+        try:
+            aspect_ratio = float(getattr(self.app, 'THUMBNAILS_ASPECT_RATIO', 16.0 / 9.0))
+            if aspect_ratio <= 0:
+                aspect_ratio = 16.0 / 9.0
+        except (TypeError, ValueError):
+            aspect_ratio = 16.0 / 9.0
+
+        target_w = win_w * 0.11
+
+        padding = self.thumbnails_container.padding
+        if isinstance(padding, (list, tuple)):
+            pad_h = padding[0] + padding[2]
+            pad_v = padding[1] + padding[3]
+        else:
+            pad_h = 2 * padding
+            pad_v = 2 * padding
+
+        spacing_total = max(0, len(self.thumbnail_slots) - 1) * self.thumbnails_container.spacing
+        max_total_h = win_h * 0.55
+
+        inner_w = max(0, target_w - pad_h)
+        slot_h = inner_w / aspect_ratio
+        total_h = (len(self.thumbnail_slots) * slot_h) + spacing_total + pad_v
+
+        if total_h > max_total_h and len(self.thumbnail_slots) > 0:
+            avail_for_slots = max(0, max_total_h - spacing_total - pad_v)
+            slot_h = avail_for_slots / float(len(self.thumbnail_slots))
+            inner_w = slot_h * aspect_ratio
+            target_w = inner_w + pad_h
+
+        self.thumbnails_container.width = target_w
+        for slot in self.thumbnail_slots:
+            slot.width = inner_w
+            slot.height = inner_w / aspect_ratio
+
+        self.thumbnails_container.height = sum(slot.height for slot in self.thumbnail_slots) + spacing_total + pad_v
 
     def _refresh_thumbnails(self):
         for shot, slot in enumerate(self.thumbnail_slots):

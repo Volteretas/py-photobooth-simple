@@ -186,6 +186,30 @@ class Config:
     def get_blur_collage(self):
         return self._get_boolean(('Capture', 'Picture'), 'BLUR_COLLAGE', fallback=False)
 
+    def get_thumbnails_aspect_ratio_str(self):
+        val = self._get_string(('THUMBNAILS', 'Thumbnails'), 'ASPECT_RATIO', fallback='16:9').strip()
+        normalized = val.replace('/', ':')
+        if normalized in {'16:9', '4:3', '1:1', '3:2', '9:16'}:
+            return normalized
+        return '16:9'
+
+    def get_thumbnails_aspect_ratio(self):
+        ratio_str = self.get_thumbnails_aspect_ratio_str()
+        ratios = {
+            '16:9': 16.0 / 9.0,
+            '4:3': 4.0 / 3.0,
+            '1:1': 1.0,
+            '3:2': 3.0 / 2.0,
+            '9:16': 9.0 / 16.0,
+        }
+        return ratios.get(ratio_str, 16.0 / 9.0)
+
+    def get_thumbnails_image_fit_mode(self):
+        mode = self._get_string(('THUMBNAILS', 'Thumbnails'), 'IMAGE_FIT_MODE', fallback='contain').strip().lower()
+        if mode in {'contain', 'cover'}:
+            return mode
+        return 'contain'
+
     def _get_dslr_params(self, section):
         """Returns a dict param -> value for the given DSLR section. Empty or None value = do not set."""
         keys = ['SHUTTERSPEED', 'APERTURE', 'FOCUSMODE', 'ISO']

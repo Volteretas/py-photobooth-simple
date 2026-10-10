@@ -81,6 +81,8 @@ class PhotoboothApp(App):
         self.BLUR_CAMERA = config.get_blur_camera()
         self.BLUR_IMAGES = config.get_blur_images()
         self.BLUR_COLLAGE = config.get_blur_collage()
+        self.THUMBNAILS_ASPECT_RATIO = config.get_thumbnails_aspect_ratio()
+        self.THUMBNAILS_IMAGE_FIT_MODE = config.get_thumbnails_image_fit_mode()
         self.COUNTDOWN = config.get_countdown()
         self.CAPTURE_TIMEOUT = config.get_capture_timeout()
         self.PROCESSING_TIMEOUT = config.get_processing_timeout()

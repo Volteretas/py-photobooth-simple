@@ -76,6 +76,17 @@ class WebServer:
         ('3200', '3200'),
         ('6400', '6400'),
     ]
+    THUMBNAILS_ASPECT_RATIO_CHOICES = [
+        ('16:9', '16:9'),
+        ('4:3', '4:3'),
+        ('1:1', '1:1'),
+        ('3:2', '3:2'),
+        ('9:16', '9:16'),
+    ]
+    THUMBNAILS_IMAGE_FIT_MODE_CHOICES = [
+        ('contain', 'contain: muestra la fotografía completa, sin recortarla'),
+        ('cover', 'cover: llena el contenedor y recorta la imagen cuando sea necesario'),
+    ]
     CONFIG_FORM_SECTIONS = (
         {
             'title': 'Global',
@@ -132,6 +143,30 @@ class WebServer:
                 {'section': 'Capture', 'option': 'PREVIEW_BLUR_REFRESH_FRAMES', 'label': 'Preview blur refresh frames', 'control': 'number', 'number_type': 'int', 'min': 1, 'step': 1, 'inline_with_previous': True},
                 {'section': 'Capture', 'option': 'BLUR_IMAGES', 'label': 'Blur captured images', 'control': 'checkbox'},
                 {'section': 'Capture', 'option': 'BLUR_COLLAGE', 'label': 'Blur collages', 'control': 'checkbox'},
+            ),
+        },
+        {
+            'title': 'Miniaturas',
+            'description': 'Relación de aspecto y modo de ajuste de las miniaturas de la cámara.',
+            'fields': (
+                {
+                    'section': 'THUMBNAILS',
+                    'option': 'ASPECT_RATIO',
+                    'label': 'Relación de aspecto',
+                    'control': 'select',
+                    'default': '16:9',
+                    'choices': THUMBNAILS_ASPECT_RATIO_CHOICES,
+                    'help': 'Proporción de los contenedores de las miniaturas.',
+                },
+                {
+                    'section': 'THUMBNAILS',
+                    'option': 'IMAGE_FIT_MODE',
+                    'label': 'Ajuste de imagen',
+                    'control': 'select',
+                    'default': 'contain',
+                    'choices': THUMBNAILS_IMAGE_FIT_MODE_CHOICES,
+                    'help': 'Cómo se adapta cada fotografía al contenedor.',
+                },
             ),
         },
         {
@@ -607,6 +642,18 @@ class WebServer:
                 return 'auto'
             return value
 
+        if field_spec['option'] == 'ASPECT_RATIO':
+            normalized = value.replace('/', ':')
+            if normalized in {'16:9', '4:3', '1:1', '3:2', '9:16'}:
+                return normalized
+            return field_spec.get('default', '16:9')
+
+        if field_spec['option'] == 'IMAGE_FIT_MODE':
+            normalized = value.lower()
+            if normalized in {'contain', 'cover'}:
+                return normalized
+            return field_spec.get('default', 'contain')
+
         return value
 
     def _build_select_choices(self, field_spec, current_value):
@@ -642,7 +689,14 @@ class WebServer:
             for field_spec in section_spec['fields']:
                 section = field_spec['section']
                 option = field_spec['option']
-                values[(section, option)] = parser.get(section, option, fallback=field_spec.get('default', ''))
+                fallback = field_spec.get('default', '')
+                if parser.has_option(section, option):
+                    val = parser.get(section, option)
+                elif section == 'THUMBNAILS' and parser.has_option('Thumbnails', option):
+                    val = parser.get('Thumbnails', option)
+                else:
+                    val = fallback
+                values[(section, option)] = val
         return values
 
     def _get_config_field_spec(self, section, option):
@@ -716,7 +770,14 @@ class WebServer:
                 section = field_spec['section']
                 option = field_spec['option']
                 field_name = self._get_form_field_name(section, option)
-                raw_value = form_values.get(field_name, parser.get(section, option, fallback=field_spec.get('default', '')))
+                if field_name in form_values:
+                    raw_value = form_values[field_name]
+                elif parser.has_option(section, option):
+                    raw_value = parser.get(section, option)
+                elif section == 'THUMBNAILS' and parser.has_option('Thumbnails', option):
+                    raw_value = parser.get('Thumbnails', option)
+                else:
+                    raw_value = field_spec.get('default', '')
                 normalized_value = self._normalize_form_value(field_spec, raw_value)
 
                 rendered_field = dict(field_spec)
@@ -761,6 +822,24 @@ class WebServer:
 
         if option == 'CAMERA':
             return value or 'auto'
+
+        if option == 'ASPECT_RATIO':
+            if not value:
+                raise ValueError(f'{field_spec["label"]} is required.')
+            normalized = value.replace('/', ':')
+            allowed = {'16:9', '4:3', '1:1', '3:2', '9:16'}
+            if normalized not in allowed:
+                raise ValueError(f'Invalid aspect ratio: {value}. Allowed values: 16:9, 4:3, 1:1, 3:2, 9:16.')
+            return normalized
+
+        if option == 'IMAGE_FIT_MODE':
+            if not value:
+                raise ValueError(f'{field_spec["label"]} is required.')
+            normalized = value.lower()
+            allowed = {'contain', 'cover'}
+            if normalized not in allowed:
+                raise ValueError(f'Invalid image fit mode: {value}. Allowed values: contain, cover.')
+            return normalized
 
         if number_type == 'int':
             if value == '':
@@ -866,6 +945,7 @@ class WebServer:
         for (section, option), value in updates.items():
             section_values.setdefault(section, {})[option] = value
 
+        section_lookup = {sec.lower(): sec for sec in section_values}
         section_pattern = re.compile(r'^\s*\[(.+?)\]\s*$')
         option_pattern = re.compile(r'^([ \t]*)([^=;#][^=]*?)([ \t]*=[ \t]*)(.*?)(\r?\n?)$')
         lines = content.splitlines(keepends=True)
@@ -876,8 +956,9 @@ class WebServer:
         line_ending = '\n'
 
         def append_missing_options(section):
-            for option, value in section_values.get(section, {}).items():
-                key = (section, option)
+            canonical = section_lookup.get(section.lower(), section)
+            for option, value in section_values.get(canonical, {}).items():
+                key = (canonical, option)
                 if key in seen_options:
                     continue
                 rendered_lines.append(f'{option} = {value}{line_ending}')
@@ -893,8 +974,10 @@ class WebServer:
             if section_match:
                 if current_section is not None:
                     append_missing_options(current_section)
-                current_section = section_match.group(1).strip()
+                raw_section = section_match.group(1).strip()
+                current_section = section_lookup.get(raw_section.lower(), raw_section)
                 existing_sections.add(current_section)
+                existing_sections.add(raw_section)
                 rendered_lines.append(line)
                 continue
 
@@ -913,7 +996,7 @@ class WebServer:
             append_missing_options(current_section)
 
         for section, options in section_values.items():
-            if section in existing_sections:
+            if section in existing_sections or section.lower() in {s.lower() for s in existing_sections}:
                 continue
             if rendered_lines and rendered_lines[-1].strip():
                 rendered_lines.append(line_ending)
